@@ -25,7 +25,14 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install yfinance pandas requests
+        run: |
+          pip install yfinance pandas requests
+          # 🔧 แก้บั๊ก SSL certificate mismatch กับ fc.yahoo.com บน GitHub Actions runner:
+          # yfinance เวอร์ชันใหม่ใช้ curl_cffi (TLS impersonation) เป็นค่าเริ่มต้น ซึ่งบางครั้งเจอ
+          # ปัญหา SSL handshake กับ fc.yahoo.com บนเครือข่ายของ GitHub Actions โดยเฉพาะ
+          # ถอด curl_cffi ออก เพื่อบังคับให้ yfinance fallback ไปใช้ requests library ธรรมดาแทน
+          # (yfinance รองรับ fallback นี้อยู่แล้วตั้งแต่เวอร์ชัน 1.3.0+ เป็นทางการ)
+          pip uninstall -y curl_cffi
 
       - name: Run alert scanner
         env:
