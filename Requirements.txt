@@ -5,3 +5,4 @@ numpy
 google-genai
 anthropic
 pydantic
+lxml
