@@ -1,0 +1,43 @@
+name: Stock Alert Scanner
+
+# 🕐 ตารางเวลา (เวลา UTC): ครอบคลุมช่วงตลาดหุ้นไทยเปิด (~03:00-10:00 UTC = 10:00-17:00 ICT)
+# และตลาดหุ้นสหรัฐฯ เปิด (~13:00-21:00 UTC = ครอบคลุม pre/post market เล็กน้อย) เฉพาะวันจันทร์-ศุกร์
+# ตั้งทุก 30 นาทีเพื่อประหยัดโควตา Actions minutes (ถ้า repo เป็น public ใช้ฟรีไม่จำกัด
+# ปรับเป็น */15 ได้ถ้าต้องการถี่ขึ้น)
+on:
+  schedule:
+    - cron: '*/30 3-10,13-21 * * 1-5'
+  workflow_dispatch: {}  # กดรันเองได้จากแท็บ Actions บน GitHub เพื่อทดสอบ
+
+permissions:
+  contents: write  # ต้องมีสิทธิ์เขียน เพื่อ commit ไฟล์ alert_state.json กลับเข้า repo
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install yfinance pandas requests
+
+      - name: Run alert scanner
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ALERT_LEVELS: 'STRONG_BUY,STRONG_SELL'
+        run: python alert_scanner.py
+
+      - name: Commit updated alert state
+        run: |
+          git config user.name "alert-scanner-bot"
+          git config user.email "actions@github.com"
+          git add alert_state.json
+          git diff --staged --quiet || git commit -m "🔄 อัปเดตสถานะเรตติ้งล่าสุดจากการสแกน [skip ci]"
+          git push
