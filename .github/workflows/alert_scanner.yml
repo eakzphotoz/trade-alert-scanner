@@ -46,5 +46,12 @@ jobs:
           git config user.name "alert-scanner-bot"
           git config user.email "actions@github.com"
           git add alert_state.json
-          git diff --staged --quiet || git commit -m "🔄 อัปเดตสถานะเรตติ้งล่าสุดจากการสแกน [skip ci]"
-          git push
+          if git diff --staged --quiet; then
+            echo "ไม่มีการเปลี่ยนแปลงสถานะ ข้ามการ commit"
+          else
+            git commit -m "🔄 อัปเดตสถานะเรตติ้งล่าสุดจากการสแกน [skip ci]"
+            # 🔧 กัน race condition: ถ้ามีคน/บอทอื่น push ขึ้น GitHub ระหว่างที่ workflow นี้กำลังรันอยู่
+            # ให้ดึงของล่าสุดมา rebase ก่อนเสมอ แทนที่จะ push ทับตรงๆ แล้วโดนปฏิเสธ
+            git pull --rebase origin main
+            git push
+          fi
