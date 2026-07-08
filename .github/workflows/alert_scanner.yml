@@ -26,7 +26,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install yfinance pandas requests
+          pip install yfinance pandas requests lxml
           # 🔧 แก้บั๊ก SSL certificate mismatch กับ fc.yahoo.com บน GitHub Actions runner:
           # yfinance เวอร์ชันใหม่ใช้ curl_cffi (TLS impersonation) เป็นค่าเริ่มต้น ซึ่งบางครั้งเจอ
           # ปัญหา SSL handshake กับ fc.yahoo.com บนเครือข่ายของ GitHub Actions โดยเฉพาะ
