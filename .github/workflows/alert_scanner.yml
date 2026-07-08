@@ -42,16 +42,25 @@ jobs:
         run: python alert_scanner.py
 
       - name: Commit updated alert state
+        continue-on-error: true  # ถ้า push ไม่สำเร็จในที่สุด ไม่ต้องให้ทั้ง workflow ขึ้น "failed"
+                                  # เพราะงานสำคัญ (สแกน + ส่งแจ้งเตือน) สำเร็จไปแล้วก่อนหน้านี้
         run: |
           git config user.name "alert-scanner-bot"
           git config user.email "actions@github.com"
           git add alert_state.json
           if git diff --staged --quiet; then
             echo "ไม่มีการเปลี่ยนแปลงสถานะ ข้ามการ commit"
-          else
-            git commit -m "🔄 อัปเดตสถานะเรตติ้งล่าสุดจากการสแกน [skip ci]"
-            # 🔧 กัน race condition: ถ้ามีคน/บอทอื่น push ขึ้น GitHub ระหว่างที่ workflow นี้กำลังรันอยู่
-            # ให้ดึงของล่าสุดมา rebase ก่อนเสมอ แทนที่จะ push ทับตรงๆ แล้วโดนปฏิเสธ
-            git pull --rebase origin main
-            git push
+            exit 0
           fi
+          git commit -m "🔄 อัปเดตสถานะเรตติ้งล่าสุดจากการสแกน [skip ci]"
+          # 🔧 กัน race condition: ลองดึงของล่าสุดมา rebase แล้ว push ซ้ำสูงสุด 3 ครั้ง
+          # เผื่อมีคน/บอทอื่น push ชนกันพอดี (เช่นรัน 2 รอบซ้อนกัน หรือพี่ push มือพร้อมกัน)
+          for i in 1 2 3; do
+            if git pull --rebase origin main && git push; then
+              echo "✅ push สำเร็จ (ครั้งที่ $i)"
+              exit 0
+            fi
+            echo "⚠️ push ไม่สำเร็จ ครั้งที่ $i กำลังลองใหม่..."
+            sleep 5
+          done
+          echo "⚠️ push ไม่สำเร็จหลังลอง 3 ครั้ง แต่การสแกน+แจ้งเตือนสำเร็จไปแล้ว จะลองใหม่ในรอบถัดไป"
