@@ -14,5 +14,9 @@
   "TH:CPALL.BK": "BUY",
   "TH:AOT.BK": "BUY",
   "TH:ADVANC.BK": "BUY",
-  "TH:SCB.BK": "NEUTRAL"
+  "TH:SCB.BK": "NEUTRAL",
+  "US:MSFT": "BUY",
+  "US:AMD": "SELL",
+  "US:RKLB": "SELL",
+  "US:ORCL": "BUY"
 }
