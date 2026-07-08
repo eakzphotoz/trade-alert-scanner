@@ -1,5 +1,18 @@
 {
   "Crypto:BTC-USD": "SELL",
-  "Crypto:ETH-USD": "NEUTRAL",
-  "Crypto:SOL-USD": "NEUTRAL"
+  "Crypto:ETH-USD": "SELL",
+  "Crypto:SOL-USD": "SELL",
+  "US:AAPL": "BUY",
+  "US:NVDA": "SELL",
+  "US:AMZN": "NEUTRAL",
+  "US:GOOGL": "BUY",
+  "US:META": "NEUTRAL",
+  "US:TSLA": "NEUTRAL",
+  "US:MU": "NEUTRAL",
+  "US:PLTR": "NEUTRAL",
+  "TH:PTT.BK": "BUY",
+  "TH:CPALL.BK": "BUY",
+  "TH:AOT.BK": "BUY",
+  "TH:ADVANC.BK": "BUY",
+  "TH:SCB.BK": "NEUTRAL"
 }
