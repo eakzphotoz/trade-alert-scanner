@@ -1,5 +1,5 @@
 {
-  "US": ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD", "MU", "PLTR"],
+  "US": ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD", "MU", "PLTR", "MU", "RKLB", "ORCL"],
   "TH": ["PTT.BK", "CPALL.BK", "AOT.BK", "ADVANC.BK", "SCB.BK"],
   "Crypto": ["BTC-USD", "ETH-USD", "SOL-USD"]
 }
