@@ -3,19 +3,26 @@ alert_scanner.py
 =================
 สคริปต์แจ้งเตือนพื้นหลัง ออกแบบให้รันแบบ scheduled (เช่นบน GitHub Actions cron) โดย:
 
-1. สแกนหุ้นใน watchlist (alert_watchlist.json) ด้วยสูตร rule-based เดียวกับในแอป
-   (ใช้ rating_engine.py ร่วมกัน) — ขั้นตอนนี้ "ไม่เรียก AI เลยแม้แต่ครั้งเดียว" ใช้แค่ yfinance
-   ซึ่งฟรี จึงรันถี่แค่ไหนก็ไม่เสีย token
+1. สแกนหุ้นด้วยสูตร rule-based เดียวกับในแอป (ใช้ rating_engine.py ร่วมกัน) — ขั้นตอนนี้
+   "ไม่เรียก AI เลยแม้แต่ครั้งเดียว" ใช้แค่ yfinance ซึ่งฟรี จึงรันถี่แค่ไหนก็ไม่เสีย token
 2. เทียบเรตติ้งล่าสุดกับสถานะที่บันทึกไว้ครั้งก่อน (alert_state.json) — แจ้งเตือนเฉพาะตอนที่
    เรตติ้ง "เปลี่ยนระดับเข้าสู่ STRONG_BUY หรือ STRONG_SELL" เท่านั้น (ปรับได้ผ่าน ALERT_LEVELS)
    ไม่แจ้งซ้ำทุกรอบที่สแกนแล้วเจอเรตติ้งเดิม กันสแปม
 3. ส่งข้อความแจ้งเตือนผ่าน Telegram Bot (ฟรี ไม่จำกัดจำนวนข้อความสำหรับใช้ส่วนตัว)
+
+🔍 ขอบเขตหุ้นที่สแกน (ไม่ต้องพิมพ์ ticker เองทั้งหมด):
+    - ตลาด US: ดึงรายชื่อ NASDAQ-100 มาสแกนอัตโนมัติทุกรอบ (จาก Wikipedia) รวมกับหุ้นที่พี่
+      เพิ่มเองใน alert_watchlist.json["US"] (เช่น MU ที่ไม่ได้อยู่ใน NASDAQ-100) — ไม่ทับกัน รวมกัน
+    - ตลาด TH / Crypto: ยังใช้รายชื่อจาก alert_watchlist.json ตามที่พี่กำหนดไว้ (ยังไม่ได้ทำ
+      ดึงอัตโนมัติ เพราะ SET ไม่มีดัชนี "100 ตัวใหญ่สุด" แบบเป็นทางการที่ดึงฟรีได้ง่ายเท่า NASDAQ)
+    - ปิดโหมดดึง NASDAQ-100 อัตโนมัติได้ด้วย env var US_UNIVERSE=watchlist_only
 
 การตั้งค่า (ผ่าน environment variables หรือ GitHub Actions secrets):
     TELEGRAM_BOT_TOKEN   - token ของบอทที่สร้างผ่าน @BotFather
     TELEGRAM_CHAT_ID     - chat id ของพี่ (หาได้จากคุยกับ @userinfobot ใน Telegram)
     ALERT_LEVELS         - (optional) รายชื่อเรตติ้งที่จะแจ้งเตือน คั่นด้วยจุลภาค
                             ค่าเริ่มต้น: "STRONG_BUY,STRONG_SELL"
+    US_UNIVERSE          - (optional) "nasdaq100" (ค่าเริ่มต้น) หรือ "watchlist_only"
 
 รันด้วยมือ (ทดสอบ):
     python alert_scanner.py
@@ -23,9 +30,11 @@ alert_scanner.py
 ⚠️ นี่เป็นการแจ้งเตือนเชิงเทคนิคจากสูตรคำนวณเท่านั้น ไม่ใช่คำแนะนำการลงทุน โปรดตัดสินใจด้วยวิจารณญาณของตัวเอง
 """
 
+import io
 import json
 import os
 import sys
+import urllib.request
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -42,6 +51,8 @@ from rating_engine import (
 WATCHLIST_FILE = "alert_watchlist.json"
 STATE_FILE = "alert_state.json"
 
+US_UNIVERSE_MODE = os.environ.get("US_UNIVERSE", "nasdaq100").strip().lower()
+
 ALERT_LEVELS = set(
     lvl.strip().upper()
     for lvl in os.environ.get("ALERT_LEVELS", "STRONG_BUY,STRONG_SELL").split(",")
@@ -50,6 +61,31 @@ ALERT_LEVELS = set(
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+
+def fetch_data_with_header(url):
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    with urllib.request.urlopen(req, timeout=20) as response:
+        return response.read()
+
+
+def fetch_nasdaq100_tickers():
+    """ดึงรายชื่อหุ้น NASDAQ-100 สดจาก Wikipedia (100 ตัวใหญ่สุดในตลาด NASDAQ ตอนนี้)
+    คืน list ของ ticker หรือ None ถ้าดึงไม่สำเร็จ (เช่นเน็ตมีปัญหา/Wikipedia เปลี่ยนโครงสร้างหน้า)"""
+    try:
+        html_bytes = fetch_data_with_header('https://en.wikipedia.org/wiki/Nasdaq-100')
+        tables = pd.read_html(io.StringIO(html_bytes.decode('utf-8')))
+        for df in tables:
+            col = 'Ticker' if 'Ticker' in df.columns else ('Symbol' if 'Symbol' in df.columns else None)
+            if col:
+                tickers = [str(t).strip().upper() for t in df[col].tolist() if str(t).strip()]
+                if len(tickers) >= 50:  # เช็คคร่าวๆ ว่าได้ตารางที่ถูกต้องจริง (ควรมีประมาณ 100 ตัว)
+                    return tickers
+        print("⚠️ ดึง NASDAQ-100 จาก Wikipedia ได้ แต่หาคอลัมน์ ticker ที่ถูกต้องไม่เจอ")
+        return None
+    except Exception as e:
+        print(f"⚠️ ดึงรายชื่อ NASDAQ-100 ไม่สำเร็จ: {e}")
+        return None
 
 
 def load_json(path, default):
@@ -159,6 +195,19 @@ def main():
     if not watchlist:
         print(f"❌ ไม่พบไฟล์ {WATCHLIST_FILE} หรือไฟล์ว่างเปล่า ยกเลิกการสแกน")
         sys.exit(1)
+
+    # 🔍 ตลาด US: รวมรายชื่อ NASDAQ-100 (ดึงสดอัตโนมัติ) เข้ากับหุ้นที่พี่เพิ่มเองใน watchlist
+    # (ปิดได้ด้วย US_UNIVERSE=watchlist_only ถ้าอยากคุมรายชื่อเองล้วนๆ แบบเดิม)
+    if US_UNIVERSE_MODE != "watchlist_only":
+        manual_us = watchlist.get("US", [])
+        nasdaq100 = fetch_nasdaq100_tickers()
+        if nasdaq100:
+            combined = sorted(set(nasdaq100) | set(t.upper() for t in manual_us))
+            print(f"🌐 รวม NASDAQ-100 ({len(nasdaq100)} ตัว) + watchlist เอง ({len(manual_us)} ตัว) "
+                  f"= {len(combined)} ตัว (ตัดตัวซ้ำแล้ว)")
+            watchlist["US"] = combined
+        else:
+            print("⚠️ ดึง NASDAQ-100 ไม่สำเร็จรอบนี้ ใช้แค่ watchlist ที่พี่กำหนดเองแทน")
 
     state = load_json(STATE_FILE, {})
     new_state = dict(state)
