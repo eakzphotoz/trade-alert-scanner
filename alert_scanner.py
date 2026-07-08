@@ -207,6 +207,8 @@ def main():
                   f"= {len(combined)} ตัว (ตัดตัวซ้ำแล้ว)")
             watchlist["US"] = combined
         else:
+            # แม้ดึง NASDAQ-100 ไม่สำเร็จ ก็ยัง dedupe watchlist เองด้วย กันสแกนซ้ำ (เช่น MU ที่ใส่ซ้ำ)
+            watchlist["US"] = sorted(set(t.upper() for t in watchlist.get("US", [])))
             print("⚠️ ดึง NASDAQ-100 ไม่สำเร็จรอบนี้ ใช้แค่ watchlist ที่พี่กำหนดเองแทน")
 
     state = load_json(STATE_FILE, {})
