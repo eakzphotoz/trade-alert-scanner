@@ -311,7 +311,36 @@ st.markdown("""
     }
     
     html, body, [class*="css"] { font-family: 'JetBrains Mono', monospace; }
-    .stApp { background-color: var(--bg); color: var(--text); }
+
+    /* 🌌 Aurora background: ไล่สีน้ำเงิน-ม่วง-เขียวเข้มฟุ้งๆ แทนพื้นดำล้วน ให้มีมิติสีมากขึ้น
+       ใช้ radial-gradient หลายชั้นซ้อนกัน + เคลื่อนไหวช้ามากๆ (30 วิ/รอบ) แบบ subtle
+       โทนเข้มพอให้ข้อมูล/ตัวเลขยังอ่านออกชัด ไม่ตีกับเนื้อหา */
+    .stApp {
+        background-color: #070910;
+        background-image:
+            radial-gradient(ellipse 80% 55% at 15% 8%, rgba(37,99,235,0.20), transparent 60%),
+            radial-gradient(ellipse 70% 50% at 85% 12%, rgba(139,92,246,0.16), transparent 60%),
+            radial-gradient(ellipse 90% 60% at 75% 88%, rgba(16,120,110,0.16), transparent 62%),
+            radial-gradient(ellipse 60% 45% at 10% 92%, rgba(79,70,229,0.14), transparent 60%);
+        background-attachment: fixed;
+        color: var(--text);
+    }
+    /* ชั้น aurora เคลื่อนไหวเบาๆ ทับด้านหลังสุด (ไม่รบกวนการคลิก) */
+    .stApp::before {
+        content: ""; position: fixed; inset: -20%; z-index: -1; pointer-events: none;
+        background-image:
+            radial-gradient(circle at 30% 40%, rgba(59,130,246,0.10), transparent 45%),
+            radial-gradient(circle at 70% 60%, rgba(16,185,129,0.08), transparent 45%);
+        filter: blur(40px);
+        animation: aurora-drift 30s ease-in-out infinite alternate;
+    }
+    @keyframes aurora-drift {
+        0% { transform: translate(0, 0) scale(1); }
+        50% { transform: translate(3%, -2%) scale(1.08); }
+        100% { transform: translate(-2%, 3%) scale(1.03); }
+    }
+    @media (prefers-reduced-motion: reduce) { .stApp::before { animation: none; } }
+
     h1, h2, h3, h4 { font-family: 'Space Grotesk', sans-serif !important; letter-spacing: -0.02em; }
     
     .prop-card { background-color: var(--panel); border: 1px solid var(--border); padding: 16px; border-radius: 12px; margin-bottom: 15px; }
@@ -377,8 +406,9 @@ st.markdown("""
     .app-hero {
         display: flex; align-items: center; justify-content: space-between;
         padding: 18px 24px; margin-bottom: 14px; border-radius: 14px;
-        background: linear-gradient(120deg, rgba(79,179,169,0.08), rgba(10,12,16,0) 40%, rgba(217,119,87,0.08));
-        border: 1px solid var(--border);
+        background: linear-gradient(120deg, rgba(59,130,246,0.14), rgba(139,92,246,0.06) 40%, rgba(16,185,129,0.10));
+        border: 1px solid rgba(148,163,184,0.16);
+        backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
     }
     .app-hero-title { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 1.5rem; color: var(--text); letter-spacing: -0.01em; }
     .app-hero-title span { color: var(--verdict); }
@@ -449,7 +479,7 @@ st.markdown("""
     /* 🎴 Photo-led stock card grid (ตารางผลสแกนแบบการ์ด) */
     .stock-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; margin: 10px 0 6px; }
     .stock-card-link { text-decoration: none !important; color: inherit !important; display: block; }
-    .stock-card { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); background: var(--panel); transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease; cursor: pointer; }
+    .stock-card { border-radius: 10px; overflow: hidden; border: 1px solid rgba(148,163,184,0.14); background: rgba(20,26,38,0.72); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease; cursor: pointer; }
     .stock-card-link:hover .stock-card { transform: translateY(-3px); border-color: var(--verdict); box-shadow: 0 6px 20px rgba(0,0,0,0.35); }
     .stock-card-visual { height: 76px; position: relative; }
     .stock-card-visual.dir-buy { background: linear-gradient(135deg, rgba(16,185,129,0.55), rgba(16,185,129,0.04) 75%), var(--panel-2); }
@@ -506,7 +536,7 @@ st.markdown("""
     }
 
     /* 💀 Skeleton loading card (shimmer ระหว่างรอสแกน) */
-    .skeleton-card { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); background: var(--panel); }
+    .skeleton-card { border-radius: 10px; overflow: hidden; border: 1px solid rgba(148,163,184,0.14); background: rgba(20,26,38,0.72); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
     .skeleton-visual { height: 76px; background: var(--panel-2); }
     .skeleton-body { padding: 12px 14px 16px; }
     .skeleton-line { height: 10px; border-radius: 5px; margin-bottom: 9px; background: var(--panel-2); }
@@ -518,7 +548,7 @@ st.markdown("""
     @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
     /* 🎴 Verdict card wrapper (ใช้ visual/body class ร่วมกับ stock-card เพื่อความสอดคล้องกันทั้งแอป) */
-    .verdict-card-wrap { border-radius: 12px; overflow: hidden; border: 1px solid var(--verdict); background: var(--panel); margin-bottom: 14px; }
+    .verdict-card-wrap { border-radius: 12px; overflow: hidden; border: 1px solid rgba(201,168,106,0.5); background: rgba(20,26,38,0.72); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); margin-bottom: 14px; }
 
     /* Expander */
     div[data-testid="stExpander"] { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
