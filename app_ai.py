@@ -1356,7 +1356,7 @@ st.divider()
 
 
 # 2️⃣ BOTTOM SECTION: แท็บหน้าต่างแยกจัดการพอร์ต / สแกนเนอร์ และระบบ AI DEBATE
-st.markdown("### 💼 ระบบจัดการพอร์ต (แชร์ร่วมกัน) และสแกนเนอร์สมองกล")
+st.markdown("### สแกนเนอร์สมองกล")
 
 tab_us_class, tab_th_class, tab_crypto_class, tab_journal_class = st.tabs([
     "🇺🇸 หุ้นอเมริกา (US Stocks)", "🇹🇭 หุ้นไทย (Thai Stocks)",
