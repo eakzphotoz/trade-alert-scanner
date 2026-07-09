@@ -572,6 +572,38 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ==========================================
+# 🎨 ICON SYSTEM (Lucide SVG แทน emoji ที่หัวข้อ/ปุ่ม)
+# ==========================================
+# เก็บ path ของแต่ละไอคอนไว้ตรงกลาง เรียกใช้ผ่าน icon() แทนการเขียน SVG ยาวๆ ซ้ำทุกจุด
+# ทั้งหมดมาจาก Lucide (lucide.dev) เป็น open-source ใช้ได้อิสระ สไตล์เส้นบางมินิมอลเข้ากับธีม
+_LUCIDE_PATHS = {
+    "chart-line": '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="m19 9-5 5-4-4-3 3"/>',
+    "flame": '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
+    "briefcase": '<path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/>',
+    "star": '<path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.12 2.12 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.12 2.12 0 0 0-.61 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.12 2.12 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.12 2.12 0 0 0-.61-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.12 2.12 0 0 0 1.597-1.16z"/>',
+    "search": '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+    "brain": '<path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/>',
+    "notebook": '<path d="M2 6h4"/><path d="M2 10h4"/><path d="M2 14h4"/><path d="M2 18h4"/><rect width="16" height="20" x="4" y="2" rx="2"/><path d="M16 2v20"/>',
+    "coins": '<circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="m16.71 13.88.7.71-2.82 2.82"/>',
+    "trending-up": '<path d="M16 7h6v6"/><path d="m22 7-8.5 8.5-5-5L2 17"/>',
+    "trending-down": '<path d="M16 17h6v-6"/><path d="m22 17-8.5-8.5-5 5L2 7"/>',
+    "zap": '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>',
+    "trash": '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+    "plus": '<path d="M5 12h14"/><path d="M12 5v14"/>',
+}
+
+def icon(name, size=20, color="currentColor", va=-3, mr=7):
+    """คืน SVG string ของไอคอน Lucide ตามชื่อ ใช้แทรกในหัวข้อ/ปุ่มแทน emoji
+    va = vertical-align (px), mr = margin-right (px)"""
+    paths = _LUCIDE_PATHS.get(name, "")
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 24 24" '
+        f'fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+        f'style="vertical-align:{va}px; margin-right:{mr}px;">{paths}</svg>'
+    )
+
+
 # --- 🎬 HERO HEADER ---
 st.markdown("""
 <div class="app-hero">
@@ -1401,10 +1433,9 @@ current_p, change_pct, rsi_v, ma20_v, bb_upper_v, bb_lower_v, macd_hist, vol_rat
 col_left_main, col_right_panel = st.columns([3, 1])
 
 with col_left_main:
-    _chart_icon = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px; margin-right:6px;"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="m19 9-5 5-4-4-3 3"/></svg>'
     hdr_col, star_col = st.columns([4, 1])
     with hdr_col:
-        st.markdown(f"#### {_chart_icon}Live Market Technical Chart: <span style='color:#38bdf8;'>{ticker}</span> ({st.session_state.timeframe})", unsafe_allow_html=True)
+        st.markdown(f"#### {icon('chart-line', size=22, color='#38bdf8')}Live Market Technical Chart: <span style='color:#38bdf8;'>{ticker}</span> ({st.session_state.timeframe})", unsafe_allow_html=True)
     with star_col:
         # ⭐ ปุ่มเพิ่ม/ลบหุ้นปัจจุบันเข้า watchlist (เดาตลาดจากรูปแบบ ticker)
         if ticker.endswith(".BK"):
@@ -1452,7 +1483,7 @@ with col_left_main:
     _live_chart_fragment()
 
 with col_right_panel:
-    st.markdown("#### 🔥 ความร้อนแรงรายวัน")
+    st.markdown(f"#### {icon('flame', size=20, color='#d97757')}ความร้อนแรงรายวัน", unsafe_allow_html=True)
     asset_select = st.selectbox("เลือกประเภทสินทรัพย์หลัก", ["US Stocks", "Thai Stocks", "Cryptocurrency"])
     
     asset_map = {"US Stocks": "US", "Thai Stocks": "TH", "Cryptocurrency": "Crypto"}
@@ -1478,7 +1509,7 @@ st.divider()
 
 
 # 2️⃣ BOTTOM SECTION: แท็บหน้าต่างแยกจัดการพอร์ต / สแกนเนอร์ และระบบ AI DEBATE
-st.markdown("### 💼 ระบบจัดการพอร์ต (แชร์ร่วมกัน) และสแกนเนอร์สมองกล")
+st.markdown(f"### {icon('briefcase', size=24, color='#c9a86a')}ระบบจัดการพอร์ต (แชร์ร่วมกัน) และสแกนเนอร์สมองกล", unsafe_allow_html=True)
 
 tab_watchlist, tab_us_class, tab_th_class, tab_crypto_class, tab_journal_class = st.tabs([
     "⭐ Watchlist", "🇺🇸 หุ้นอเมริกา (US Stocks)", "🇹🇭 หุ้นไทย (Thai Stocks)",
@@ -1517,7 +1548,7 @@ def _build_sparkline_svg(prices, direction):
 
 def render_watchlist_tab():
     """แสดงหุ้นใน Watchlist เป็นการ์ดกริด (สไตล์เดียวกับผลสแกน) พร้อมปุ่มดูกราฟ/ลบ"""
-    st.markdown("#### ⭐ หุ้นที่จับตา (Watchlist)")
+    st.markdown(f"#### {icon('star', size=20, color='#c9a86a')}หุ้นที่จับตา (Watchlist)", unsafe_allow_html=True)
     st.caption("เพิ่มหุ้นเข้า Watchlist ได้จากปุ่ม ☆ ใต้หัวข้อกราฟด้านบน · กดการ์ดเพื่อดูกราฟ")
 
     wl = load_watchlist()
@@ -1588,7 +1619,7 @@ def render_watchlist_tab():
     st.markdown("".join(cards_html), unsafe_allow_html=True)
 
     # ปุ่มลบ (แยกจากการ์ด เพราะการ์ดเป็นลิงก์ดูกราฟ กดลบในการ์ดจะสับสน)
-    st.markdown("###### 🗑️ เอาหุ้นออกจาก Watchlist")
+    st.markdown(f"###### {icon('trash', size=15, color='#94a3b8')}เอาหุ้นออกจาก Watchlist", unsafe_allow_html=True)
     remove_cols = st.columns(4)
     for i, tk in enumerate(wl):
         with remove_cols[i % 4]:
@@ -1632,7 +1663,7 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
             unsafe_allow_html=True
         )
 
-        st.markdown("##### 🔍 ตัวเลือกสแกนตลาดสมองกล")
+        st.markdown(f"##### {icon('search', size=18, color='#38bdf8')}ตัวเลือกสแกนตลาดสมองกล", unsafe_allow_html=True)
         scanner_type = st.selectbox("เลือกดัชนีคัดกรองเฉพาะด้าน:", scanner_market_list, key=f"select_scan_{portfolio_key}")
         use_ai_quality = st.checkbox(
             "🛡️ ให้ AI ช่วยประเมินคุณภาพหุ้นที่เจอเพิ่มเติม (ใช้ Gemini เพิ่ม 1 รอบ อาจช้าลงนิดหน่อย)",
@@ -1797,7 +1828,7 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
                             st.markdown(f"- **{row['ticker']}**: {row['quality_reason']}")
 
                 # ⭐ เพิ่มหุ้นจากผลสแกนเข้า Watchlist (เลือกได้หลายตัวรวดเดียว)
-                st.markdown("###### ⭐ เพิ่มหุ้นที่สแกนเจอเข้า Watchlist")
+                st.markdown(f"###### {icon('star', size=15, color='#c9a86a')}เพิ่มหุ้นที่สแกนเจอเข้า Watchlist", unsafe_allow_html=True)
                 wl_add_col1, wl_add_col2 = st.columns([3, 1])
                 with wl_add_col1:
                     scan_tickers = [row["ticker"] for row in table_rows]
@@ -1820,7 +1851,7 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
             st.info("💡 ไม่พบสัญญาณตลาด แนะนำกวาดสแกนด้วยตนเอง")
                 
     with col_a:
-        st.markdown("##### 🧠 AI Debate Expert")
+        st.markdown(f"##### {icon('brain', size=18, color='#a855f7')}AI Debate Expert", unsafe_allow_html=True)
         st.markdown("""
             <div class="vs-banner" style="margin-bottom:10px;">
                 <div class="vs-side vs-gemini" style="padding: 6px 12px;">
