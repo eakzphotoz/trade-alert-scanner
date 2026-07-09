@@ -290,7 +290,104 @@ st.markdown("""
     .tag-reversal-medium { background: rgba(16,185,129,0.14); color: var(--green); border: 1.5px solid rgba(16,185,129,0.45); }
     .tag-takeprofit-short { background: rgba(217,119,87,0.22); color: #f0a085; border: 1px solid rgba(217,119,87,0.55); }
     .tag-takeprofit-medium { background: rgba(217,119,87,0.14); color: var(--claude); border: 1.5px solid rgba(217,119,87,0.45); }
+
+    /* ============================================
+       ✨ ธีม widget มาตรฐานของ Streamlit ให้เข้ากับการ์ดที่มีอยู่แล้ว
+       ============================================ */
+
+    /* Hero header */
+    .app-hero {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 18px 24px; margin-bottom: 14px; border-radius: 14px;
+        background: linear-gradient(120deg, rgba(79,179,169,0.08), rgba(10,12,16,0) 40%, rgba(217,119,87,0.08));
+        border: 1px solid var(--border);
+    }
+    .app-hero-title { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 1.5rem; color: var(--text); letter-spacing: -0.01em; }
+    .app-hero-title span { color: var(--verdict); }
+    .app-hero-sub { color: #7b8494; font-size: 0.78rem; margin-top: 3px; }
+    .app-hero-live { display: flex; align-items: center; gap: 7px; font-size: 0.72rem; color: var(--green); font-family: 'JetBrains Mono', monospace; letter-spacing: 0.04em; }
+    .app-hero-live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 0 rgba(16,185,129,0.6); animation: pulse-dot 2s infinite; }
+    @keyframes pulse-dot {
+        0% { box-shadow: 0 0 0 0 rgba(16,185,129,0.55); }
+        70% { box-shadow: 0 0 0 7px rgba(16,185,129,0); }
+        100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); }
+    }
+
+    /* Buttons */
+    div[data-testid="stButton"] button, div[data-testid="stFormSubmitButton"] button {
+        border-radius: 8px; font-family: 'Space Grotesk', sans-serif; font-weight: 600;
+        border: 1px solid var(--border); transition: all 0.15s ease;
+    }
+    div[data-testid="stButton"] button[kind="primary"] {
+        background: linear-gradient(135deg, #d9b46a, var(--verdict)); color: #14110a; border: none;
+        box-shadow: 0 2px 10px rgba(201,168,106,0.25);
+    }
+    div[data-testid="stButton"] button[kind="primary"]:hover {
+        box-shadow: 0 3px 16px rgba(201,168,106,0.4); transform: translateY(-1px);
+    }
+    div[data-testid="stButton"] button[kind="secondary"] { background: var(--panel-2); color: var(--text); }
+    div[data-testid="stButton"] button[kind="secondary"]:hover { border-color: var(--verdict); color: var(--verdict); }
+
+    /* Tabs */
+    div[data-testid="stTabs"] button[data-baseweb="tab"] {
+        font-family: 'Space Grotesk', sans-serif; font-weight: 600; color: #7b8494;
+    }
+    div[data-testid="stTabs"] button[aria-selected="true"] { color: var(--verdict) !important; }
+    div[data-testid="stTabs"] [data-baseweb="tab-highlight"] {
+        background: linear-gradient(90deg, var(--gemini), var(--verdict), var(--claude)) !important; height: 2.5px !important;
+    }
+    div[data-testid="stTabs"] [data-baseweb="tab-border"] { background: var(--border) !important; }
+
+    /* Select / Multiselect / Text input / Number input */
+    div[data-baseweb="select"] > div, div[data-testid="stTextInput"] input, div[data-testid="stNumberInput"] input {
+        background-color: var(--panel-2) !important; border-color: var(--border) !important; border-radius: 8px !important;
+    }
+    div[data-baseweb="select"] > div:focus-within, div[data-testid="stTextInput"] input:focus, div[data-testid="stNumberInput"] input:focus {
+        border-color: var(--verdict) !important; box-shadow: 0 0 0 1px var(--verdict) !important;
+    }
+    div[data-baseweb="tag"] { background-color: rgba(201,168,106,0.18) !important; color: var(--verdict) !important; }
+
+    /* Checkbox / Radio accent */
+    label[data-baseweb="checkbox"] span:first-child, div[data-testid="stCheckbox"] span[data-checked] {
+        accent-color: var(--verdict);
+    }
+
+    /* Dataframe / tables */
+    div[data-testid="stDataFrame"] { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+
+    /* Alert boxes (info/warning/error/success) */
+    div[data-testid="stAlertContainer"] { background-color: var(--panel) !important; border-radius: 10px; border: 1px solid var(--border); }
+
+    /* Sidebar */
+    section[data-testid="stSidebar"] { background-color: var(--panel); border-right: 1px solid var(--border); }
+
+    /* Sliders */
+    div[data-testid="stSlider"] [role="slider"] { background-color: var(--verdict) !important; }
+    div[data-testid="stSlider"] div[style*="background-color: rgb(255, 75, 75)"] { background: var(--verdict) !important; }
+
+    /* Metric */
+    div[data-testid="stMetric"] { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; }
+
+    /* Expander */
+    div[data-testid="stExpander"] { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
+
+    /* Scrollbar polish */
+    ::-webkit-scrollbar { width: 9px; height: 9px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--verdict); }
 </style>
+""", unsafe_allow_html=True)
+
+# --- 🎬 HERO HEADER ---
+st.markdown("""
+<div class="app-hero">
+    <div>
+        <div class="app-hero-title">◆ PropFirmX <span>Terminal</span></div>
+        <div class="app-hero-sub">AI Debate Terminal — Gemini × Claude · Shared Portfolio & Signal Scanner</div>
+    </div>
+    <div class="app-hero-live"><span class="dot"></span> LIVE MARKET DATA</div>
+</div>
 """, unsafe_allow_html=True)
 
 # --- 🔄 1. ระบบ GENERATE TICKER TAPE ---
