@@ -194,6 +194,16 @@ class PennyStockQualityBatch(BaseModel):
 # --- 🔄 ระบบจำข้อมูลและสถานะเว็บ ---
 if 'active_ticker' not in st.session_state:
     st.session_state.active_ticker = "AAPL"
+
+# 🖱️ รองรับการคลิกการ์ดหุ้น: การ์ดแต่ละใบเป็นลิงก์ ?view=TICKER พอคลิกจะมาตั้ง active_ticker
+# ให้กราฟใหญ่ด้านบนอัปเดตทันที แล้วล้าง query param ทิ้งเพื่อไม่ให้ค้างเวลารีเฟรช
+_view_ticker = st.query_params.get("view")
+if _view_ticker:
+    st.session_state.active_ticker = str(_view_ticker).strip().upper()
+    st.session_state.ai_debate_result = None
+    st.session_state.chat_history = []
+    st.query_params.clear()
+
 if 'ai_debate_result' not in st.session_state:
     st.session_state.ai_debate_result = None
 if 'timeframe' not in st.session_state:
@@ -370,12 +380,14 @@ st.markdown("""
 
     /* 🎴 Photo-led stock card grid (ตารางผลสแกนแบบการ์ด) */
     .stock-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; margin: 10px 0 6px; }
-    .stock-card { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); background: var(--panel); transition: transform 0.15s ease, border-color 0.15s ease; }
-    .stock-card:hover { transform: translateY(-3px); border-color: var(--verdict); }
+    .stock-card-link { text-decoration: none !important; color: inherit !important; display: block; }
+    .stock-card { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); background: var(--panel); transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease; cursor: pointer; }
+    .stock-card-link:hover .stock-card { transform: translateY(-3px); border-color: var(--verdict); box-shadow: 0 6px 20px rgba(0,0,0,0.35); }
     .stock-card-visual { height: 76px; position: relative; }
     .stock-card-visual.dir-buy { background: linear-gradient(135deg, rgba(16,185,129,0.55), rgba(16,185,129,0.04) 75%), var(--panel-2); }
     .stock-card-visual.dir-sell { background: linear-gradient(135deg, rgba(239,68,68,0.55), rgba(239,68,68,0.04) 75%), var(--panel-2); }
     .stock-card-visual.dir-neutral { background: linear-gradient(135deg, rgba(123,132,148,0.35), rgba(123,132,148,0.03) 75%), var(--panel-2); }
+    .spark-svg { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0.9; }
     .stock-card-score-chip {
         position: absolute; top: 8px; right: 8px; background: rgba(10,12,16,0.55); backdrop-filter: blur(2px);
         color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; font-weight: 600;
@@ -385,6 +397,12 @@ st.markdown("""
     .stock-card-eyebrow { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.07em; color: #7b8494; font-family: 'JetBrains Mono', monospace; margin-bottom: 5px; }
     .stock-card-title { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 1.25rem; letter-spacing: -0.01em; margin-bottom: 5px; }
     .stock-card-desc { font-size: 0.74rem; color: #a8b0bd; line-height: 1.45; }
+    .stock-card-cta {
+        font-size: 0.66rem; font-family: 'Space Grotesk', sans-serif; font-weight: 600; color: var(--verdict);
+        text-align: center; padding: 7px; border-top: 1px solid var(--border);
+        background: rgba(201,168,106,0.06); opacity: 0; max-height: 0; transition: all 0.15s ease;
+    }
+    .stock-card-link:hover .stock-card-cta { opacity: 1; max-height: 40px; }
 
     /* 🎴 Verdict card wrapper (ใช้ visual/body class ร่วมกับ stock-card เพื่อความสอดคล้องกันทั้งแอป) */
     .verdict-card-wrap { border-radius: 12px; overflow: hidden; border: 1px solid var(--verdict); background: var(--panel); margin-bottom: 14px; }
@@ -734,6 +752,18 @@ def scan_market_batch(tickers_list, is_penny=False, market_type="US"):
 
                 # บันทึกข้อมูลเฉพาะตัวที่มีแท็กสัญญาณหรือแท็กกลยุทธ์
                 if signals or strategy_tags:
+                    # 📈 เตรียมข้อมูล sparkline: ย่อราคา Close ย้อนหลัง 3 เดือนให้เหลือ ~24 จุด
+                    # (ใช้ข้อมูลจาก batch เดิมที่ดึงมาแล้ว ไม่ยิง request เพิ่ม ไม่กระทบความเร็ว)
+                    try:
+                        closes = close.dropna().tolist()
+                        if len(closes) > 24:
+                            step = len(closes) / 24.0
+                            spark = [round(closes[min(int(i * step), len(closes) - 1)], 2) for i in range(24)]
+                        else:
+                            spark = [round(x, 2) for x in closes]
+                    except Exception:
+                        spark = []
+
                     results.append({
                         "ticker": ticker,
                         "price": round(c, 2),
@@ -748,6 +778,7 @@ def scan_market_batch(tickers_list, is_penny=False, market_type="US"):
                         "rating_icon": rating["icon"],
                         "rating_score": rating["score"],
                         "rating_votes": rating["votes"],
+                        "sparkline": spark,
                     })
             except Exception as e:
                 print(f"Error scanning {ticker}: {e}")
@@ -1287,6 +1318,33 @@ tab_us_class, tab_th_class, tab_crypto_class, tab_journal_class = st.tabs([
     "🪙 คริปโทเคอร์เรนซี (Cryptocurrency)", "📓 Trade Journal & Win Rate"
 ])
 
+def _build_sparkline_svg(prices, direction):
+    """สร้าง SVG sparkline เล็กๆ จาก list ราคา คืนสตริง SVG (บรรทัดเดียว ไม่มี indent)
+    direction: 'dir-buy'/'dir-sell'/'dir-neutral' ใช้เลือกสีเส้น"""
+    if not prices or len(prices) < 2:
+        return ""
+    stroke = {"dir-buy": "#34d399", "dir-sell": "#f87171", "dir-neutral": "#94a3b8"}.get(direction, "#94a3b8")
+    w, h, pad = 210.0, 76.0, 8.0
+    lo, hi = min(prices), max(prices)
+    span = (hi - lo) or 1.0
+    n = len(prices)
+    pts = []
+    for i, p in enumerate(prices):
+        x = pad + (w - 2 * pad) * (i / (n - 1))
+        y = pad + (h - 2 * pad) * (1 - (p - lo) / span)  # ราคาสูง = y น้อย (อยู่บน)
+        pts.append((round(x, 1), round(y, 1)))
+    line_pts = " ".join(f"{x},{y}" for x, y in pts)
+    # พื้นที่ใต้เส้น (area fill จางๆ) ปิดขอบล่าง
+    area_pts = f"{pad},{h - pad} " + line_pts + f" {w - pad},{h - pad}"
+    return (
+        f'<svg class="spark-svg" viewBox="0 0 {int(w)} {int(h)}" preserveAspectRatio="none">'
+        f'<polyline points="{area_pts}" fill="{stroke}" fill-opacity="0.12" stroke="none"/>'
+        f'<polyline points="{line_pts}" fill="none" stroke="{stroke}" stroke-width="1.6" '
+        f'stroke-linejoin="round" stroke-linecap="round"/>'
+        f'</svg>'
+    )
+
+
 def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, default_scanned_df, is_penny=False, postfix=""):
     # เก็บผลสแกนแยกตามแท็บ (portfolio_key) ไม่ใช้ key กลางร่วมกันทุกแท็บแบบเดิม
     # เพื่อกัน "สแกนหุ้นไทยแล้วไปโผล่ในแท็บคริปโต" และเพื่อแยกแยะ "ยังไม่กดสแกน" กับ "สแกนแล้วแต่ไม่พบ" ได้ถูกต้อง
@@ -1407,6 +1465,7 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
                     "rating_score": r.get("rating_score", 0.0),
                     "quality": r.get("quality_flag", ""),
                     "quality_reason": r.get("quality_reason", ""),
+                    "sparkline": r.get("sparkline", []),
                 })
 
             if not table_rows:
@@ -1431,17 +1490,23 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
                         direction = "dir-neutral"
                     quality_txt = quality_label_map.get(row["quality"], "") if row["quality"] else ""
                     eyebrow_right = quality_txt if quality_txt else "สแกนอัตโนมัติ"
+                    spark_svg = _build_sparkline_svg(row.get("sparkline", []), direction)
+                    _tk = row["ticker"]
                     card = (
+                        f'<a class="stock-card-link" href="?view={_tk}" target="_self">'
                         '<div class="stock-card">'
                         f'<div class="stock-card-visual {direction}">'
+                        f'{spark_svg}'
                         f'<div class="stock-card-score-chip">{row["rating_icon"]} {row["rating_score"]:+.2f}</div>'
                         '</div>'
                         '<div class="stock-card-body">'
                         f'<div class="stock-card-eyebrow">{row["change_str"]} &nbsp;·&nbsp; {eyebrow_right}</div>'
-                        f'<div class="stock-card-title">{row["ticker"]}</div>'
+                        f'<div class="stock-card-title">{_tk}</div>'
                         f'<div class="stock-card-desc">${row["price"]:,.2f} &nbsp;·&nbsp; {row["rating_label"]}<br>{row["tags"]}</div>'
                         '</div>'
+                        '<div class="stock-card-cta">📈 กดเพื่อดูกราฟ</div>'
                         '</div>'
+                        '</a>'
                     )
                     cards_html.append(card)
                 cards_html.append('</div>')
@@ -1455,20 +1520,6 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
                     with st.expander(f"⚠️ ดูเหตุผลที่ AI เตือนระมัดระวังสูง ({len(warn_rows)} ตัว)"):
                         for row in warn_rows:
                             st.markdown(f"- **{row['ticker']}**: {row['quality_reason']}")
-
-                sel_col1, sel_col2 = st.columns([2, 1])
-                with sel_col1:
-                    ticker_choices = [row["ticker"] for row in table_rows]
-                    selected_for_analysis = st.selectbox("เลือกหุ้นที่จะวิเคราะห์ต่อ:", ticker_choices,
-                                                          key=f"select_analyze_{portfolio_key}_{selected_tag}")
-                with sel_col2:
-                    st.write("")
-                    if st.button("🔍 วิเคราะห์ →", key=f"btn_table_sel_{portfolio_key}",
-                                 use_container_width=True, type="primary"):
-                        st.session_state.active_ticker = selected_for_analysis
-                        st.session_state.ai_debate_result = None
-                        st.session_state.chat_history = []
-                        st.rerun()
         else:
             st.info("💡 ไม่พบสัญญาณตลาด แนะนำกวาดสแกนด้วยตนเอง")
                 
