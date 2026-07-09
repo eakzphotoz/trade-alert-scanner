@@ -218,16 +218,12 @@ def save_portfolio(table_name, df):
     except Exception as e:
         st.error(f"Database Save Error ({table_name}): {e}")
 
-# เริ่มต้นสร้าง Database (รันครั้งแรก)
-if not os.path.exists(DB_FILE):
+# เริ่มต้นสร้าง Database (รันทุกครั้ง — ปลอดภัยเพราะทุก CREATE ใช้ IF NOT EXISTS
+# จึงสร้างเฉพาะตารางที่ยังไม่มี เช่น watchlist ที่เพิ่มใหม่ โดยไม่กระทบข้อมูลพอร์ตเดิม)
+try:
     init_db()
-else:
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        conn.close()
-    except sqlite3.Error as e:
-        print(f"DB file corrupted or unreadable, recreating: {e}")
-        init_db()
+except sqlite3.Error as e:
+    print(f"DB init error: {e}")
 
 journal.init_journal_db()  # 📓 สร้างตาราง trade_journal ถ้ายังไม่มี (ปลอดภัย ใช้ IF NOT EXISTS)
 news.init_news_db()  # 📰 สร้างตาราง news_flags ถ้ายังไม่มี (ปลอดภัย ใช้ IF NOT EXISTS)
@@ -1769,6 +1765,27 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
                     with st.expander(f"⚠️ ดูเหตุผลที่ AI เตือนระมัดระวังสูง ({len(warn_rows)} ตัว)"):
                         for row in warn_rows:
                             st.markdown(f"- **{row['ticker']}**: {row['quality_reason']}")
+
+                # ⭐ เพิ่มหุ้นจากผลสแกนเข้า Watchlist (เลือกได้หลายตัวรวดเดียว)
+                st.markdown("###### ⭐ เพิ่มหุ้นที่สแกนเจอเข้า Watchlist")
+                wl_add_col1, wl_add_col2 = st.columns([3, 1])
+                with wl_add_col1:
+                    scan_tickers = [row["ticker"] for row in table_rows]
+                    picked_for_wl = st.multiselect(
+                        "เลือกหุ้นที่อยากจับตา (เพิ่มได้หลายตัว):", scan_tickers,
+                        key=f"wl_pick_{portfolio_key}_{selected_tag}"
+                    )
+                with wl_add_col2:
+                    st.write("")
+                    if st.button("⭐ เพิ่มเข้า Watchlist", key=f"wl_add_scan_{portfolio_key}",
+                                 use_container_width=True, type="primary"):
+                        if picked_for_wl:
+                            for tk in picked_for_wl:
+                                add_to_watchlist(tk, market_type)
+                            st.toast(f"เพิ่ม {len(picked_for_wl)} ตัวเข้า Watchlist แล้ว", icon="⭐")
+                            st.rerun()
+                        else:
+                            st.toast("ยังไม่ได้เลือกหุ้น", icon="⚠️")
         else:
             st.info("💡 ไม่พบสัญญาณตลาด แนะนำกวาดสแกนด้วยตนเอง")
                 
