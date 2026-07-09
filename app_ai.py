@@ -397,6 +397,17 @@ st.markdown("""
     ::-webkit-scrollbar-track { background: var(--bg); }
     ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
     ::-webkit-scrollbar-thumb:hover { background: var(--verdict); }
+
+    /* 📱 Responsive: จอมือถือ/แท็บเล็ตแคบ (Streamlit จัดการ st.columns ให้เองแล้ว
+       ส่วนนี้แก้เฉพาะ layout ที่เขียนเอง (flex/grid) ซึ่งไม่ยุบให้อัตโนมัติ) */
+    @media (max-width: 640px) {
+        .plan-grid { grid-template-columns: 1fr !important; }
+        .app-hero { flex-direction: column; align-items: flex-start; gap: 10px; }
+        .app-hero-live { align-self: flex-start; }
+        .vs-banner { flex-direction: column; }
+        .vs-gemini { border-right: none; border-bottom: 1px solid var(--border); }
+        .stock-card-grid { grid-template-columns: 1fr !important; }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1407,6 +1418,8 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
 
                 # 🎴 Photo-led card grid: การ์ดไล่สีแทนรูปภาพ (เขียว=ซื้อ, แดง=ขาย, เทา=เป็นกลาง)
                 # ตามสไตล์ eyebrow tag ตัวพิมพ์เล็ก + หัวข้อตัวหนา + คำอธิบายบาง
+                # ⚠️ สำคัญ: HTML แต่ละบรรทัดต้องชิดซ้าย (ไม่มี indent นำหน้า) เพราะ markdown ของ Streamlit
+                # จะตีความบรรทัดที่เว้นวรรค 4 ช่องขึ้นไปเป็น "code block" แล้วแสดง tag ดิบออกมาแทนที่จะ render
                 cards_html = ['<div class="stock-card-grid">']
                 for row in table_rows[:60]:  # จำกัด 60 การ์ดแรกกันหน้าหนักเกินไป (เรียงดีสุดไว้บนแล้ว)
                     code = str(row.get("rating_label", ""))
@@ -1417,18 +1430,20 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
                     else:
                         direction = "dir-neutral"
                     quality_txt = quality_label_map.get(row["quality"], "") if row["quality"] else ""
-                    cards_html.append(f"""
-                    <div class="stock-card">
-                        <div class="stock-card-visual {direction}">
-                            <div class="stock-card-score-chip">{row['rating_icon']} {row['rating_score']:+.2f}</div>
-                        </div>
-                        <div class="stock-card-body">
-                            <div class="stock-card-eyebrow">{row['change_str']} &nbsp;·&nbsp; {quality_txt if quality_txt else 'สแกนอัตโนมัติ'}</div>
-                            <div class="stock-card-title">{row['ticker']}</div>
-                            <div class="stock-card-desc">${row['price']:,.2f} &nbsp;·&nbsp; {row['rating_label']}<br>{row['tags']}</div>
-                        </div>
-                    </div>
-                    """)
+                    eyebrow_right = quality_txt if quality_txt else "สแกนอัตโนมัติ"
+                    card = (
+                        '<div class="stock-card">'
+                        f'<div class="stock-card-visual {direction}">'
+                        f'<div class="stock-card-score-chip">{row["rating_icon"]} {row["rating_score"]:+.2f}</div>'
+                        '</div>'
+                        '<div class="stock-card-body">'
+                        f'<div class="stock-card-eyebrow">{row["change_str"]} &nbsp;·&nbsp; {eyebrow_right}</div>'
+                        f'<div class="stock-card-title">{row["ticker"]}</div>'
+                        f'<div class="stock-card-desc">${row["price"]:,.2f} &nbsp;·&nbsp; {row["rating_label"]}<br>{row["tags"]}</div>'
+                        '</div>'
+                        '</div>'
+                    )
+                    cards_html.append(card)
                 cards_html.append('</div>')
                 st.markdown("".join(cards_html), unsafe_allow_html=True)
                 if len(table_rows) > 60:
@@ -1517,26 +1532,28 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
             direction_class = {"buy": "dir-buy", "sell": "dir-sell", "hold": "dir-neutral"}[banner_class]
 
             # 🎴 การ์ด Verdict สไตล์ photo-led เดียวกับผลสแกน (ใช้ gradient ไล่สีแทนรูปภาพ)
-            st.markdown(f"""
-            <div class="verdict-card-wrap">
-                <div class="stock-card-visual {direction_class}" style="height:70px;">
-                    <div class="stock-card-score-chip">{icon} {action_label}</div>
-                </div>
-                <div class="stock-card-body" style="padding:16px 18px 18px;">
-                    <div class="stock-card-eyebrow">{ticker} &nbsp;·&nbsp; AI DEBATE VERDICT</div>
-                    <div class="stock-card-title" style="font-size:1.4rem;">{action_label}</div>
-                    <div class="stock-card-desc" style="font-size:0.8rem; color:#cbd5e1;">{c.get('action_summary', '')}</div>
-                    <div style="font-size:0.75rem; color:var(--verdict); font-weight:bold; margin-top:12px;">🛡 {c.get('support_zone', '-')} &nbsp;&nbsp;|&nbsp;&nbsp; 🚀 {c.get('resistance_zone', '-')}</div>
-                    <div class="plan-grid" style="margin-top:6px; gap:8px;">
-                        <div class="plan-cell entry" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">จุดเข้าซื้อ</div><div class="plan-value" style="font-size:0.8rem;">{c.get('entry_price', '-')}</div></div>
-                        <div class="plan-cell stop" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">Stop Loss</div><div class="plan-value" style="font-size:0.8rem;">{c.get('stop_loss', '-')}</div></div>
-                        <div class="plan-cell target" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">Take Profit</div><div class="plan-value" style="font-size:0.8rem;">{c.get('take_profit', '-')}</div></div>
-                    </div>
-                    <div style="font-size:0.75rem; color:#94a3b8; margin-top:10px; line-height:1.3;"><strong>เหตุผลสรุป:</strong> {c.get('final_reasoning', '-')}</div>
-                    <div style="font-size:0.7rem; color:#7b8494; margin-top:4px;">💼 {c.get('position_sizing_note', '-')}</div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            # ⚠️ HTML ต้องชิดซ้าย (ไม่มี indent นำหน้า) กัน markdown ตีความเป็น code block แล้วโชว์ tag ดิบ
+            verdict_html = (
+                '<div class="verdict-card-wrap">'
+                f'<div class="stock-card-visual {direction_class}" style="height:70px;">'
+                f'<div class="stock-card-score-chip">{icon} {action_label}</div>'
+                '</div>'
+                '<div class="stock-card-body" style="padding:16px 18px 18px;">'
+                f'<div class="stock-card-eyebrow">{ticker} &nbsp;·&nbsp; AI DEBATE VERDICT</div>'
+                f'<div class="stock-card-title" style="font-size:1.4rem;">{action_label}</div>'
+                f'<div class="stock-card-desc" style="font-size:0.8rem; color:#cbd5e1;">{c.get("action_summary", "")}</div>'
+                f'<div style="font-size:0.75rem; color:var(--verdict); font-weight:bold; margin-top:12px;">🛡 {c.get("support_zone", "-")} &nbsp;&nbsp;|&nbsp;&nbsp; 🚀 {c.get("resistance_zone", "-")}</div>'
+                '<div class="plan-grid" style="margin-top:6px; gap:8px;">'
+                f'<div class="plan-cell entry" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">จุดเข้าซื้อ</div><div class="plan-value" style="font-size:0.8rem;">{c.get("entry_price", "-")}</div></div>'
+                f'<div class="plan-cell stop" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">Stop Loss</div><div class="plan-value" style="font-size:0.8rem;">{c.get("stop_loss", "-")}</div></div>'
+                f'<div class="plan-cell target" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">Take Profit</div><div class="plan-value" style="font-size:0.8rem;">{c.get("take_profit", "-")}</div></div>'
+                '</div>'
+                f'<div style="font-size:0.75rem; color:#94a3b8; margin-top:10px; line-height:1.3;"><strong>เหตุผลสรุป:</strong> {c.get("final_reasoning", "-")}</div>'
+                f'<div style="font-size:0.7rem; color:#7b8494; margin-top:4px;">💼 {c.get("position_sizing_note", "-")}</div>'
+                '</div>'
+                '</div>'
+            )
+            st.markdown(verdict_html, unsafe_allow_html=True)
             
             # สรุปดีเบตจำลองความเห็นย่อย
             with st.expander("🔍 ดูบทวิพากษ์และข้อท้าทาย (Gemini vs Claude)"):
