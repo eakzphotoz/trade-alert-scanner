@@ -404,6 +404,51 @@ st.markdown("""
     }
     .stock-card-link:hover .stock-card-cta { opacity: 1; max-height: 40px; }
 
+    /* ป้ายเรตติ้งบนการ์ด (มุมซ้ายบนของแถบ visual) */
+    .stock-card-badge {
+        position: absolute; top: 8px; left: 8px; z-index: 2;
+        font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 0.6rem; letter-spacing: 0.06em;
+        padding: 3px 8px; border-radius: 5px; text-transform: uppercase; backdrop-filter: blur(2px);
+    }
+    .badge-strong-buy { background: rgba(16,185,129,0.9); color: #06281c; }
+    .badge-buy { background: rgba(16,185,129,0.28); color: #6ee7a0; border: 1px solid rgba(16,185,129,0.5); }
+    .badge-neutral { background: rgba(123,132,148,0.28); color: #cbd5e1; border: 1px solid rgba(123,132,148,0.5); }
+    .badge-sell { background: rgba(239,68,68,0.28); color: #fca5a5; border: 1px solid rgba(239,68,68,0.5); }
+    .badge-strong-sell { background: rgba(239,68,68,0.9); color: #2a0808; }
+
+    /* จุด live กะพริบที่ปลายเส้น sparkline (ราคาล่าสุด) */
+    .spark-live-pulse { transform-box: fill-box; transform-origin: center; animation: spark-pulse 1.8s ease-out infinite; }
+    @keyframes spark-pulse {
+        0% { r: 2.6; opacity: 0.9; stroke-width: 1.2; }
+        70% { r: 8; opacity: 0; stroke-width: 0.4; }
+        100% { r: 8; opacity: 0; }
+    }
+    .spark-live-dot { animation: spark-dot-glow 1.8s ease-in-out infinite; }
+    @keyframes spark-dot-glow { 0%, 100% { opacity: 0.75; } 50% { opacity: 1; } }
+
+    /* fade+slide การ์ดตอนโผล่ (เล่นครั้งเดียว ไม่วนซ้ำ) */
+    .stock-card-link { animation: card-appear 0.4s ease-out backwards; }
+    @keyframes card-appear {
+        from { opacity: 0; transform: translateY(14px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    /* ปิด animation ให้ผู้ที่ตั้งค่าลดการเคลื่อนไหว (accessibility) */
+    @media (prefers-reduced-motion: reduce) {
+        .stock-card-link, .spark-live-pulse, .spark-live-dot { animation: none !important; }
+    }
+
+    /* 💀 Skeleton loading card (shimmer ระหว่างรอสแกน) */
+    .skeleton-card { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); background: var(--panel); }
+    .skeleton-visual { height: 76px; background: var(--panel-2); }
+    .skeleton-body { padding: 12px 14px 16px; }
+    .skeleton-line { height: 10px; border-radius: 5px; margin-bottom: 9px; background: var(--panel-2); }
+    .skeleton-line.w40 { width: 40%; } .skeleton-line.w60 { width: 60%; } .skeleton-line.w80 { width: 80%; }
+    .skeleton-visual, .skeleton-line {
+        background: linear-gradient(90deg, var(--panel-2) 25%, rgba(255,255,255,0.06) 50%, var(--panel-2) 75%);
+        background-size: 200% 100%; animation: shimmer 1.3s infinite;
+    }
+    @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
     /* 🎴 Verdict card wrapper (ใช้ visual/body class ร่วมกับ stock-card เพื่อความสอดคล้องกันทั้งแอป) */
     .verdict-card-wrap { border-radius: 12px; overflow: hidden; border: 1px solid var(--verdict); background: var(--panel); margin-bottom: 14px; }
 
@@ -1336,11 +1381,14 @@ def _build_sparkline_svg(prices, direction):
     line_pts = " ".join(f"{x},{y}" for x, y in pts)
     # พื้นที่ใต้เส้น (area fill จางๆ) ปิดขอบล่าง
     area_pts = f"{pad},{h - pad} " + line_pts + f" {w - pad},{h - pad}"
+    last_x, last_y = pts[-1]  # จุดสุดท้าย = ราคาล่าสุด ใช้วางจุด live กะพริบ
     return (
         f'<svg class="spark-svg" viewBox="0 0 {int(w)} {int(h)}" preserveAspectRatio="none">'
         f'<polyline points="{area_pts}" fill="{stroke}" fill-opacity="0.12" stroke="none"/>'
         f'<polyline points="{line_pts}" fill="none" stroke="{stroke}" stroke-width="1.6" '
         f'stroke-linejoin="round" stroke-linecap="round"/>'
+        f'<circle class="spark-live-pulse" cx="{last_x}" cy="{last_y}" r="2.6" fill="none" stroke="{stroke}" stroke-width="1.2"/>'
+        f'<circle class="spark-live-dot" cx="{last_x}" cy="{last_y}" r="2.6" fill="{stroke}"/>'
         f'</svg>'
     )
 
@@ -1391,6 +1439,15 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
             is_penny_mode = is_universe_scan or (scanner_type == "Penny Stocks (ต่ำกว่า $5)")
             spinner_msg = ("สมองกลกำลังกวาดหุ้นสุ่มจากทั้งตลาด NASDAQ (อาจใช้เวลานานกว่าปกติ)..." if is_universe_scan
                            else "สมองกลกำลังกวาดดัชนีชี้วัดเทคนิคอลและจับแท็กกลยุทธ์หุ้นทั้งหมด (อาจใช้เวลาสักครู่)...")
+            # 💀 Skeleton loading: โชว์การ์ดเปล่าวิบวับ (shimmer) ระหว่างรอ แทนหน้าว่างเปล่า ดูโปรขึ้น
+            skeleton_slot = st.empty()
+            skeleton_cards = '<div class="stock-card-grid">' + "".join(
+                '<div class="skeleton-card"><div class="skeleton-visual"></div>'
+                '<div class="skeleton-body"><div class="skeleton-line w60"></div>'
+                '<div class="skeleton-line w80"></div><div class="skeleton-line w40"></div></div></div>'
+                for _ in range(8)
+            ) + '</div>'
+            skeleton_slot.markdown(skeleton_cards, unsafe_allow_html=True)
             with st.spinner(spinner_msg):
                 t_list = load_market_tickers(scanner_type)
                 results = scan_market_batch(t_list, is_penny=is_penny_mode, market_type=market_type)
@@ -1407,6 +1464,7 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
 
                 st.session_state[scan_results_key] = results
                 st.session_state[scan_has_run_key] = True
+                skeleton_slot.empty()  # ล้าง skeleton ทิ้งก่อนแสดงผลจริง
                 st.toast(f"อัปเดตระบบตรวจสอบสัญญาณสแกนเนอร์สำเร็จ! พบสัญญาณ {len(results)} ตัว", icon="🔥")
                 st.rerun()
                 
@@ -1479,8 +1537,16 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
                 # ตามสไตล์ eyebrow tag ตัวพิมพ์เล็ก + หัวข้อตัวหนา + คำอธิบายบาง
                 # ⚠️ สำคัญ: HTML แต่ละบรรทัดต้องชิดซ้าย (ไม่มี indent นำหน้า) เพราะ markdown ของ Streamlit
                 # จะตีความบรรทัดที่เว้นวรรค 4 ช่องขึ้นไปเป็น "code block" แล้วแสดง tag ดิบออกมาแทนที่จะ render
+                # ป้ายเรตติ้งบนการ์ด: ตัวย่อ + คลาสสีตามระดับ
+                rating_badge_map = {
+                    "STRONG_BUY": ("STRONG BUY", "badge-strong-buy"),
+                    "BUY": ("BUY", "badge-buy"),
+                    "NEUTRAL": ("NEUTRAL", "badge-neutral"),
+                    "SELL": ("SELL", "badge-sell"),
+                    "STRONG_SELL": ("STRONG SELL", "badge-strong-sell"),
+                }
                 cards_html = ['<div class="stock-card-grid">']
-                for row in table_rows[:60]:  # จำกัด 60 การ์ดแรกกันหน้าหนักเกินไป (เรียงดีสุดไว้บนแล้ว)
+                for idx, row in enumerate(table_rows[:60]):  # จำกัด 60 การ์ดแรกกันหน้าหนักเกินไป (เรียงดีสุดไว้บนแล้ว)
                     code = str(row.get("rating_label", ""))
                     if "ซื้อ" in code:
                         direction = "dir-buy"
@@ -1492,11 +1558,15 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
                     eyebrow_right = quality_txt if quality_txt else "สแกนอัตโนมัติ"
                     spark_svg = _build_sparkline_svg(row.get("sparkline", []), direction)
                     _tk = row["ticker"]
+                    badge_text, badge_cls = rating_badge_map.get(row.get("rating_code", ""), ("", "badge-neutral"))
+                    # stagger fade-in เฉพาะ 12 ใบแรก (ที่เหลือโผล่พร้อมกัน กันรอนานตอนมีหลายใบ)
+                    delay = f"{min(idx, 12) * 0.045:.3f}s"
                     card = (
-                        f'<a class="stock-card-link" href="?view={_tk}" target="_self">'
+                        f'<a class="stock-card-link" href="?view={_tk}" target="_self" style="animation-delay:{delay};">'
                         '<div class="stock-card">'
                         f'<div class="stock-card-visual {direction}">'
                         f'{spark_svg}'
+                        f'<div class="stock-card-badge {badge_cls}">{badge_text}</div>'
                         f'<div class="stock-card-score-chip">{row["rating_icon"]} {row["rating_score"]:+.2f}</div>'
                         '</div>'
                         '<div class="stock-card-body">'
