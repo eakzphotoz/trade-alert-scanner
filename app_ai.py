@@ -368,6 +368,27 @@ st.markdown("""
     /* Metric */
     div[data-testid="stMetric"] { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; }
 
+    /* 🎴 Photo-led stock card grid (ตารางผลสแกนแบบการ์ด) */
+    .stock-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; margin: 10px 0 6px; }
+    .stock-card { border-radius: 10px; overflow: hidden; border: 1px solid var(--border); background: var(--panel); transition: transform 0.15s ease, border-color 0.15s ease; }
+    .stock-card:hover { transform: translateY(-3px); border-color: var(--verdict); }
+    .stock-card-visual { height: 76px; position: relative; }
+    .stock-card-visual.dir-buy { background: linear-gradient(135deg, rgba(16,185,129,0.55), rgba(16,185,129,0.04) 75%), var(--panel-2); }
+    .stock-card-visual.dir-sell { background: linear-gradient(135deg, rgba(239,68,68,0.55), rgba(239,68,68,0.04) 75%), var(--panel-2); }
+    .stock-card-visual.dir-neutral { background: linear-gradient(135deg, rgba(123,132,148,0.35), rgba(123,132,148,0.03) 75%), var(--panel-2); }
+    .stock-card-score-chip {
+        position: absolute; top: 8px; right: 8px; background: rgba(10,12,16,0.55); backdrop-filter: blur(2px);
+        color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; font-weight: 600;
+        padding: 3px 8px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.12);
+    }
+    .stock-card-body { padding: 12px 14px 14px; }
+    .stock-card-eyebrow { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.07em; color: #7b8494; font-family: 'JetBrains Mono', monospace; margin-bottom: 5px; }
+    .stock-card-title { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 1.25rem; letter-spacing: -0.01em; margin-bottom: 5px; }
+    .stock-card-desc { font-size: 0.74rem; color: #a8b0bd; line-height: 1.45; }
+
+    /* 🎴 Verdict card wrapper (ใช้ visual/body class ร่วมกับ stock-card เพื่อความสอดคล้องกันทั้งแอป) */
+    .verdict-card-wrap { border-radius: 12px; overflow: hidden; border: 1px solid var(--verdict); background: var(--panel); margin-bottom: 14px; }
+
     /* Expander */
     div[data-testid="stExpander"] { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
 
@@ -1383,18 +1404,35 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
                 # เรียงจากเรตติ้งดีสุด (คะแนนสูงสุด) ไปแย่สุด เป็นค่าเริ่มต้น
                 table_rows.sort(key=lambda x: x["rating_score"], reverse=True)
                 quality_label_map = {"ปกติ": "✅ ปกติ", "ระมัดระวังสูง": "⚠️ ระมัดระวังสูง", "ไม่แน่ใจ": "❔ ไม่แน่ใจ"}
-                display_df = pd.DataFrame([{
-                    "หุ้น": row["ticker"],
-                    "เรตติ้ง": f"{row['rating_icon']} {row['rating_label']}",
-                    "คะแนน": row["rating_score"],
-                    "ราคา ($)": row["price"],
-                    "% เปลี่ยน": row["change_str"],
-                    "แท็ก/สัญญาณ": row["tags"],
-                    "AI คุณภาพ": quality_label_map.get(row["quality"], "-") if row["quality"] else "-",
-                } for row in table_rows])
 
-                table_height = min(38 * (len(display_df) + 1) + 3, 420)
-                st.dataframe(display_df, use_container_width=True, hide_index=True, height=table_height)
+                # 🎴 Photo-led card grid: การ์ดไล่สีแทนรูปภาพ (เขียว=ซื้อ, แดง=ขาย, เทา=เป็นกลาง)
+                # ตามสไตล์ eyebrow tag ตัวพิมพ์เล็ก + หัวข้อตัวหนา + คำอธิบายบาง
+                cards_html = ['<div class="stock-card-grid">']
+                for row in table_rows[:60]:  # จำกัด 60 การ์ดแรกกันหน้าหนักเกินไป (เรียงดีสุดไว้บนแล้ว)
+                    code = str(row.get("rating_label", ""))
+                    if "ซื้อ" in code:
+                        direction = "dir-buy"
+                    elif "ขาย" in code:
+                        direction = "dir-sell"
+                    else:
+                        direction = "dir-neutral"
+                    quality_txt = quality_label_map.get(row["quality"], "") if row["quality"] else ""
+                    cards_html.append(f"""
+                    <div class="stock-card">
+                        <div class="stock-card-visual {direction}">
+                            <div class="stock-card-score-chip">{row['rating_icon']} {row['rating_score']:+.2f}</div>
+                        </div>
+                        <div class="stock-card-body">
+                            <div class="stock-card-eyebrow">{row['change_str']} &nbsp;·&nbsp; {quality_txt if quality_txt else 'สแกนอัตโนมัติ'}</div>
+                            <div class="stock-card-title">{row['ticker']}</div>
+                            <div class="stock-card-desc">${row['price']:,.2f} &nbsp;·&nbsp; {row['rating_label']}<br>{row['tags']}</div>
+                        </div>
+                    </div>
+                    """)
+                cards_html.append('</div>')
+                st.markdown("".join(cards_html), unsafe_allow_html=True)
+                if len(table_rows) > 60:
+                    st.caption(f"แสดง 60 จาก {len(table_rows)} ตัวที่ตรงเงื่อนไข (เรียงเรตติ้งดีสุดไว้บนแล้ว)")
 
                 # แยกเหตุผลของ AI เฉพาะตัวที่เตือน "ระมัดระวังสูง" ไว้ในกล่องพับเก็บ ไม่ให้ตารางหลักรกเกินไป
                 warn_rows = [row for row in table_rows if row["quality"] == "ระมัดระวังสูง" and row["quality_reason"]]
@@ -1476,11 +1514,27 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
             banner_class = "buy" if signal_upper == "BUY" else "sell" if signal_upper == "SELL" else "hold"
             icon = "🟢" if banner_class == "buy" else "🔴" if banner_class == "sell" else "🟡"
             action_label = {"buy": "ซื้อ (BUY)", "sell": "ขาย (SELL)", "hold": "ถือครอง (HOLD)"}[banner_class]
+            direction_class = {"buy": "dir-buy", "sell": "dir-sell", "hold": "dir-neutral"}[banner_class]
 
+            # 🎴 การ์ด Verdict สไตล์ photo-led เดียวกับผลสแกน (ใช้ gradient ไล่สีแทนรูปภาพ)
             st.markdown(f"""
-            <div style="background: linear-gradient(90deg, rgba(201,168,106,0.15), rgba(201,168,106,0.02)); border: 1.5px solid var(--verdict); border-radius: 8px; padding: 10px; margin-bottom:12px;">
-                <div style="font-weight:bold; color:var(--verdict); font-size:0.9rem;">{icon} คำแนะนำสุดท้าย: {action_label}</div>
-                <div style="font-size:0.8rem; color:#cbd5e1; margin-top:4px;">{c.get('action_summary', '')}</div>
+            <div class="verdict-card-wrap">
+                <div class="stock-card-visual {direction_class}" style="height:70px;">
+                    <div class="stock-card-score-chip">{icon} {action_label}</div>
+                </div>
+                <div class="stock-card-body" style="padding:16px 18px 18px;">
+                    <div class="stock-card-eyebrow">{ticker} &nbsp;·&nbsp; AI DEBATE VERDICT</div>
+                    <div class="stock-card-title" style="font-size:1.4rem;">{action_label}</div>
+                    <div class="stock-card-desc" style="font-size:0.8rem; color:#cbd5e1;">{c.get('action_summary', '')}</div>
+                    <div style="font-size:0.75rem; color:var(--verdict); font-weight:bold; margin-top:12px;">🛡 {c.get('support_zone', '-')} &nbsp;&nbsp;|&nbsp;&nbsp; 🚀 {c.get('resistance_zone', '-')}</div>
+                    <div class="plan-grid" style="margin-top:6px; gap:8px;">
+                        <div class="plan-cell entry" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">จุดเข้าซื้อ</div><div class="plan-value" style="font-size:0.8rem;">{c.get('entry_price', '-')}</div></div>
+                        <div class="plan-cell stop" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">Stop Loss</div><div class="plan-value" style="font-size:0.8rem;">{c.get('stop_loss', '-')}</div></div>
+                        <div class="plan-cell target" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">Take Profit</div><div class="plan-value" style="font-size:0.8rem;">{c.get('take_profit', '-')}</div></div>
+                    </div>
+                    <div style="font-size:0.75rem; color:#94a3b8; margin-top:10px; line-height:1.3;"><strong>เหตุผลสรุป:</strong> {c.get('final_reasoning', '-')}</div>
+                    <div style="font-size:0.7rem; color:#7b8494; margin-top:4px;">💼 {c.get('position_sizing_note', '-')}</div>
+                </div>
             </div>
             """, unsafe_allow_html=True)
             
@@ -1497,21 +1551,6 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
                     <span class="pill">ความเสี่ยง: {c.get('risk_level', '-')}</span>
                 </div>
                 """, unsafe_allow_html=True)
-            
-            # พิกัด Verdict Action Plan
-            signal_class = {"BUY": "signal-buy", "SELL": "signal-sell", "HOLD": "signal-hold"}.get(signal_upper, "signal-hold")
-            st.markdown(f"""
-            <div class="verdict-box" style="padding:12px; margin-top:8px;">
-                <div style="font-size:0.75rem; color:var(--verdict); font-weight:bold;">🛡 {c.get('support_zone', '-')} &nbsp;&nbsp;|&nbsp;&nbsp; 🚀 {c.get('resistance_zone', '-')}</div>
-                <div class="plan-grid" style="margin-top:6px; gap:8px;">
-                    <div class="plan-cell entry" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">จุดเข้าซื้อ</div><div class="plan-value" style="font-size:0.8rem;">{c.get('entry_price', '-')}</div></div>
-                    <div class="plan-cell stop" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">Stop Loss</div><div class="plan-value" style="font-size:0.8rem;">{c.get('stop_loss', '-')}</div></div>
-                    <div class="plan-cell target" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">Take Profit</div><div class="plan-value" style="font-size:0.8rem;">{c.get('take_profit', '-')}</div></div>
-                </div>
-                <div style="font-size:0.75rem; color:#94a3b8; margin-top:8px; line-height:1.3;"><strong>เหตุผลสรุป:</strong> {c.get('final_reasoning', '-')}</div>
-                <div style="font-size:0.7rem; color:#7b8494; margin-top:4px;">💼 {c.get('position_sizing_note', '-')}</div>
-            </div>
-            """, unsafe_allow_html=True)
             
             # ส่วนแชทสืบถามเพิ่มเติมกับ AI Copilot
             st.divider()
