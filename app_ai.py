@@ -79,9 +79,81 @@ def init_db():
         cursor.execute(f'SELECT COUNT(*) FROM {table_name}')
         if cursor.fetchone()[0] == 0:
             cursor.executemany(f'INSERT INTO {table_name} (Ticker, Shares, AvgCost) VALUES (?, ?, ?)', default_data)
-            
+
+    # ⭐ ตาราง watchlist: เก็บหุ้นที่ผู้ใช้อยากจับตา (ไม่ต้องมีจำนวน/ต้นทุนเหมือนพอร์ต)
+    # added_at ใช้เรียงลำดับให้ตัวที่เพิ่งเพิ่มอยู่บนสุด
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS watchlist (
+            Ticker TEXT PRIMARY KEY,
+            Market TEXT,
+            added_at TEXT
+        )
+    ''')
+
     conn.commit()
     conn.close()
+
+
+def load_watchlist(market=None):
+    """อ่าน watchlist จาก SQLite คืน list ของ ticker (เรียงตัวที่เพิ่งเพิ่มไว้บนสุด)
+    ถ้าระบุ market จะกรองเฉพาะตลาดนั้น (US/TH/Crypto)"""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        if market:
+            df = pd.read_sql_query("SELECT Ticker FROM watchlist WHERE Market = ? ORDER BY added_at DESC", conn, params=(market,))
+        else:
+            df = pd.read_sql_query("SELECT Ticker FROM watchlist ORDER BY added_at DESC", conn)
+        conn.close()
+        return df["Ticker"].astype(str).str.strip().str.upper().tolist() if not df.empty else []
+    except Exception as e:
+        print(f"Watchlist load error: {e}")
+        return []
+
+
+def add_to_watchlist(ticker, market):
+    """เพิ่มหุ้นเข้า watchlist (ถ้ามีอยู่แล้วจะไม่ซ้ำ เพราะ Ticker เป็น PRIMARY KEY)"""
+    try:
+        ticker = str(ticker).strip().upper()
+        if not ticker:
+            return False
+        conn = sqlite3.connect(DB_FILE)
+        conn.execute(
+            "INSERT OR IGNORE INTO watchlist (Ticker, Market, added_at) VALUES (?, ?, ?)",
+            (ticker, market, datetime.now().isoformat())
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Watchlist add error: {e}")
+        return False
+
+
+def remove_from_watchlist(ticker):
+    """ลบหุ้นออกจาก watchlist"""
+    try:
+        ticker = str(ticker).strip().upper()
+        conn = sqlite3.connect(DB_FILE)
+        conn.execute("DELETE FROM watchlist WHERE Ticker = ?", (ticker,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Watchlist remove error: {e}")
+        return False
+
+
+def is_in_watchlist(ticker):
+    """เช็คว่าหุ้นอยู่ใน watchlist แล้วหรือยัง"""
+    try:
+        ticker = str(ticker).strip().upper()
+        conn = sqlite3.connect(DB_FILE)
+        cur = conn.execute("SELECT 1 FROM watchlist WHERE Ticker = ? LIMIT 1", (ticker,))
+        found = cur.fetchone() is not None
+        conn.close()
+        return found
+    except Exception:
+        return False
 
 def load_portfolio(table_name):
     """
@@ -1303,7 +1375,31 @@ current_p, change_pct, rsi_v, ma20_v, bb_upper_v, bb_lower_v, macd_hist, vol_rat
 col_left_main, col_right_panel = st.columns([3, 1])
 
 with col_left_main:
-    st.markdown(f"#### 📈 Live Market Technical Chart: <span style='color:#38bdf8;'>{ticker}</span> ({st.session_state.timeframe})", unsafe_allow_html=True)
+    _chart_icon = '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px; margin-right:6px;"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="m19 9-5 5-4-4-3 3"/></svg>'
+    hdr_col, star_col = st.columns([4, 1])
+    with hdr_col:
+        st.markdown(f"#### {_chart_icon}Live Market Technical Chart: <span style='color:#38bdf8;'>{ticker}</span> ({st.session_state.timeframe})", unsafe_allow_html=True)
+    with star_col:
+        # ⭐ ปุ่มเพิ่ม/ลบหุ้นปัจจุบันเข้า watchlist (เดาตลาดจากรูปแบบ ticker)
+        if ticker.endswith(".BK"):
+            _tk_market = "TH"
+        elif "-USD" in ticker:
+            _tk_market = "Crypto"
+        else:
+            _tk_market = "US"
+        _in_wl = is_in_watchlist(ticker)
+        if _in_wl:
+            if st.button("★ อยู่ใน Watchlist", key="wl_toggle_chart", use_container_width=True,
+                         help="กดเพื่อเอาออกจาก Watchlist"):
+                remove_from_watchlist(ticker)
+                st.toast(f"เอา {ticker} ออกจาก Watchlist แล้ว", icon="☆")
+                st.rerun()
+        else:
+            if st.button("☆ เพิ่มเข้า Watchlist", key="wl_toggle_chart", use_container_width=True, type="primary",
+                         help="กดเพื่อเพิ่มเข้า Watchlist"):
+                add_to_watchlist(ticker, _tk_market)
+                st.toast(f"เพิ่ม {ticker} เข้า Watchlist แล้ว", icon="⭐")
+                st.rerun()
 
     col_ind_select, col_refresh = st.columns([3, 1])
     with col_ind_select:
@@ -1356,10 +1452,10 @@ st.divider()
 
 
 # 2️⃣ BOTTOM SECTION: แท็บหน้าต่างแยกจัดการพอร์ต / สแกนเนอร์ และระบบ AI DEBATE
-st.markdown("### สแกนเนอร์สมองกล")
+st.markdown("### 💼 ระบบจัดการพอร์ต (แชร์ร่วมกัน) และสแกนเนอร์สมองกล")
 
-tab_us_class, tab_th_class, tab_crypto_class, tab_journal_class = st.tabs([
-    "🇺🇸 หุ้นอเมริกา (US Stocks)", "🇹🇭 หุ้นไทย (Thai Stocks)",
+tab_watchlist, tab_us_class, tab_th_class, tab_crypto_class, tab_journal_class = st.tabs([
+    "⭐ Watchlist", "🇺🇸 หุ้นอเมริกา (US Stocks)", "🇹🇭 หุ้นไทย (Thai Stocks)",
     "🪙 คริปโทเคอร์เรนซี (Cryptocurrency)", "📓 Trade Journal & Win Rate"
 ])
 
@@ -1391,6 +1487,89 @@ def _build_sparkline_svg(prices, direction):
         f'<circle class="spark-live-dot" cx="{last_x}" cy="{last_y}" r="2.6" fill="{stroke}"/>'
         f'</svg>'
     )
+
+
+def render_watchlist_tab():
+    """แสดงหุ้นใน Watchlist เป็นการ์ดกริด (สไตล์เดียวกับผลสแกน) พร้อมปุ่มดูกราฟ/ลบ"""
+    st.markdown("#### ⭐ หุ้นที่จับตา (Watchlist)")
+    st.caption("เพิ่มหุ้นเข้า Watchlist ได้จากปุ่ม ☆ ใต้หัวข้อกราฟด้านบน · กดการ์ดเพื่อดูกราฟ")
+
+    wl = load_watchlist()
+    if not wl:
+        st.info("ยังไม่มีหุ้นใน Watchlist — พิมพ์ ticker ที่ช่องค้นหาด้านบน แล้วกดปุ่ม ☆ เพิ่มเข้า Watchlist ได้เลย")
+        return
+
+    # เพิ่ม/ลบด่วนจากช่องพิมพ์ (เผื่ออยากเพิ่มหลายตัวรวดเดียวไม่ต้องเปิดกราฟทีละตัว)
+    add_col1, add_col2 = st.columns([3, 1])
+    with add_col1:
+        new_tk = st.text_input("เพิ่มหุ้นเข้า Watchlist เร็วๆ (เช่น AAPL, PTT.BK, BTC-USD):", key="wl_quick_add").strip().upper()
+    with add_col2:
+        st.write("")
+        if st.button("➕ เพิ่ม", key="wl_quick_add_btn", use_container_width=True, type="primary"):
+            if new_tk:
+                m = "TH" if new_tk.endswith(".BK") else "Crypto" if "-USD" in new_tk else "US"
+                add_to_watchlist(new_tk, m)
+                st.toast(f"เพิ่ม {new_tk} แล้ว", icon="⭐")
+                st.rerun()
+
+    st.markdown(f"**มีหุ้นใน Watchlist ทั้งหมด {len(wl)} ตัว**")
+
+    # ดึงราคา+เรตติ้งของหุ้นใน watchlist มาแสดงเป็นการ์ด (ใช้ระบบเรตติ้งเดียวกับสแกนเนอร์)
+    wl_data = scan_market_batch(wl, is_penny=False, market_type="US")
+    # scan_market_batch เก็บเฉพาะตัวที่มีสัญญาณ — แต่ watchlist อยากเห็นทุกตัว จึงเติมตัวที่ไม่มีสัญญาณกลับเข้ามา
+    found_tickers = {r["ticker"] for r in wl_data}
+    for tk in wl:
+        if tk not in found_tickers:
+            wl_data.append({"ticker": tk, "price": 0.0, "change_pct": 0.0, "rating_code": "NEUTRAL",
+                            "rating_label": "-", "rating_icon": "⚪", "rating_score": 0.0,
+                            "strategy_tags": [], "signals": [], "sparkline": []})
+
+    rating_badge_map = {
+        "STRONG_BUY": ("STRONG BUY", "badge-strong-buy"), "BUY": ("BUY", "badge-buy"),
+        "NEUTRAL": ("NEUTRAL", "badge-neutral"), "SELL": ("SELL", "badge-sell"),
+        "STRONG_SELL": ("STRONG SELL", "badge-strong-sell"),
+    }
+    cards_html = ['<div class="stock-card-grid">']
+    for idx, r in enumerate(wl_data):
+        code = str(r.get("rating_label", ""))
+        direction = "dir-buy" if "ซื้อ" in code else "dir-sell" if "ขาย" in code else "dir-neutral"
+        spark_svg = _build_sparkline_svg(r.get("sparkline", []), direction)
+        _tk = r["ticker"]
+        badge_text, badge_cls = rating_badge_map.get(r.get("rating_code", ""), ("", "badge-neutral"))
+        change = r.get("change_pct", 0.0)
+        change_str = f"🟢 +{change:.2f}%" if change >= 0 else f"🔴 {change:.2f}%"
+        price_str = f"${r['price']:,.2f}" if r.get("price") else "—"
+        delay = f"{min(idx, 12) * 0.045:.3f}s"
+        card = (
+            f'<a class="stock-card-link" href="?view={_tk}" target="_self" style="animation-delay:{delay};">'
+            '<div class="stock-card">'
+            f'<div class="stock-card-visual {direction}">'
+            f'{spark_svg}'
+            f'<div class="stock-card-badge {badge_cls}">{badge_text}</div>'
+            f'<div class="stock-card-score-chip">{r["rating_icon"]} {r["rating_score"]:+.2f}</div>'
+            '</div>'
+            '<div class="stock-card-body">'
+            f'<div class="stock-card-eyebrow">{change_str} &nbsp;·&nbsp; ⭐ WATCHLIST</div>'
+            f'<div class="stock-card-title">{_tk}</div>'
+            f'<div class="stock-card-desc">{price_str} &nbsp;·&nbsp; {r["rating_label"]}</div>'
+            '</div>'
+            '<div class="stock-card-cta">📈 กดเพื่อดูกราฟ</div>'
+            '</div>'
+            '</a>'
+        )
+        cards_html.append(card)
+    cards_html.append('</div>')
+    st.markdown("".join(cards_html), unsafe_allow_html=True)
+
+    # ปุ่มลบ (แยกจากการ์ด เพราะการ์ดเป็นลิงก์ดูกราฟ กดลบในการ์ดจะสับสน)
+    st.markdown("###### 🗑️ เอาหุ้นออกจาก Watchlist")
+    remove_cols = st.columns(4)
+    for i, tk in enumerate(wl):
+        with remove_cols[i % 4]:
+            if st.button(f"✕ {tk}", key=f"wl_rm_{tk}", use_container_width=True):
+                remove_from_watchlist(tk)
+                st.toast(f"เอา {tk} ออกแล้ว", icon="🗑️")
+                st.rerun()
 
 
 def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, default_scanned_df, is_penny=False, postfix=""):
@@ -1776,6 +1955,9 @@ def render_trade_journal_tab():
 
 
 # ดำเนินการกระจายหน้าตามแท็บคลาสต่างๆ
+with tab_watchlist:
+    render_watchlist_tab()
+
 with tab_us_class:
     render_portfolio_and_scanner_area(
         "port_us", ["NASDAQ 100", "S&P 500", "Penny Stocks (ต่ำกว่า $5)", "Penny Stocks (สแกนทั้งตลาด NASDAQ + AI กรองคุณภาพ)"],
