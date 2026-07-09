@@ -6,3 +6,4 @@ google-genai
 anthropic
 pydantic
 lxml
+streamlit-lightweight-charts
