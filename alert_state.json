@@ -92,7 +92,7 @@
   "US:TER": "BUY",
   "US:TMUS": "BUY",
   "US:TRI": "NEUTRAL",
-  "US:TSLA": "NEUTRAL",
+  "US:TSLA": "BUY",
   "US:TTWO": "BUY",
   "US:TXN": "BUY",
   "US:VRTX": "BUY",
@@ -108,5 +108,5 @@
   "TH:SCB.BK": "NEUTRAL",
   "Crypto:BTC-USD": "SELL",
   "Crypto:ETH-USD": "SELL",
-  "Crypto:SOL-USD": "SELL"
+  "Crypto:SOL-USD": "NEUTRAL"
 }
