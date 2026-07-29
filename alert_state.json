@@ -77,7 +77,7 @@
   "US:PCAR": "BUY",
   "US:PDD": "BUY",
   "US:PEP": "BUY",
-  "US:PLTR": "NEUTRAL",
+  "US:PLTR": "SELL",
   "US:PYPL": "NEUTRAL",
   "US:QCOM": "BUY",
   "US:REGN": "NEUTRAL",
@@ -107,6 +107,6 @@
   "TH:ADVANC.BK": "NEUTRAL",
   "TH:SCB.BK": "BUY",
   "Crypto:BTC-USD": "SELL",
-  "Crypto:ETH-USD": "SELL",
+  "Crypto:ETH-USD": "NEUTRAL",
   "Crypto:SOL-USD": "SELL"
 }
