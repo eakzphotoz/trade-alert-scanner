@@ -9,7 +9,7 @@
   "US:ALAB": "BUY",
   "US:ALNY": "BUY",
   "US:AMAT": "BUY",
-  "US:AMD": "STRONG_BUY",
+  "US:AMD": "BUY",
   "US:AMGN": "BUY",
   "US:AMZN": "BUY",
   "US:APP": "BUY",
@@ -107,6 +107,6 @@
   "TH:ADVANC.BK": "BUY",
   "TH:SCB.BK": "BUY",
   "Crypto:BTC-USD": "SELL",
-  "Crypto:ETH-USD": "SELL",
+  "Crypto:ETH-USD": "NEUTRAL",
   "Crypto:SOL-USD": "SELL"
 }
