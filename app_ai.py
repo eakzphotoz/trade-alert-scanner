@@ -12,7 +12,6 @@ import random
 import sqlite3
 import os
 import time
-import html as html_lib  # 🔒 ใช้ escape เนื้อหาก่อนแทรกเข้า unsafe_allow_html กัน XSS
 from datetime import datetime
 from pydantic import BaseModel
 
@@ -80,9 +79,81 @@ def init_db():
         cursor.execute(f'SELECT COUNT(*) FROM {table_name}')
         if cursor.fetchone()[0] == 0:
             cursor.executemany(f'INSERT INTO {table_name} (Ticker, Shares, AvgCost) VALUES (?, ?, ?)', default_data)
-            
+
+    # ⭐ ตาราง watchlist: เก็บหุ้นที่ผู้ใช้อยากจับตา (ไม่ต้องมีจำนวน/ต้นทุนเหมือนพอร์ต)
+    # added_at ใช้เรียงลำดับให้ตัวที่เพิ่งเพิ่มอยู่บนสุด
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS watchlist (
+            Ticker TEXT PRIMARY KEY,
+            Market TEXT,
+            added_at TEXT
+        )
+    ''')
+
     conn.commit()
     conn.close()
+
+
+def load_watchlist(market=None):
+    """อ่าน watchlist จาก SQLite คืน list ของ ticker (เรียงตัวที่เพิ่งเพิ่มไว้บนสุด)
+    ถ้าระบุ market จะกรองเฉพาะตลาดนั้น (US/TH/Crypto)"""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        if market:
+            df = pd.read_sql_query("SELECT Ticker FROM watchlist WHERE Market = ? ORDER BY added_at DESC", conn, params=(market,))
+        else:
+            df = pd.read_sql_query("SELECT Ticker FROM watchlist ORDER BY added_at DESC", conn)
+        conn.close()
+        return df["Ticker"].astype(str).str.strip().str.upper().tolist() if not df.empty else []
+    except Exception as e:
+        print(f"Watchlist load error: {e}")
+        return []
+
+
+def add_to_watchlist(ticker, market):
+    """เพิ่มหุ้นเข้า watchlist (ถ้ามีอยู่แล้วจะไม่ซ้ำ เพราะ Ticker เป็น PRIMARY KEY)"""
+    try:
+        ticker = str(ticker).strip().upper()
+        if not ticker:
+            return False
+        conn = sqlite3.connect(DB_FILE)
+        conn.execute(
+            "INSERT OR IGNORE INTO watchlist (Ticker, Market, added_at) VALUES (?, ?, ?)",
+            (ticker, market, datetime.now().isoformat())
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Watchlist add error: {e}")
+        return False
+
+
+def remove_from_watchlist(ticker):
+    """ลบหุ้นออกจาก watchlist"""
+    try:
+        ticker = str(ticker).strip().upper()
+        conn = sqlite3.connect(DB_FILE)
+        conn.execute("DELETE FROM watchlist WHERE Ticker = ?", (ticker,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Watchlist remove error: {e}")
+        return False
+
+
+def is_in_watchlist(ticker):
+    """เช็คว่าหุ้นอยู่ใน watchlist แล้วหรือยัง"""
+    try:
+        ticker = str(ticker).strip().upper()
+        conn = sqlite3.connect(DB_FILE)
+        cur = conn.execute("SELECT 1 FROM watchlist WHERE Ticker = ? LIMIT 1", (ticker,))
+        found = cur.fetchone() is not None
+        conn.close()
+        return found
+    except Exception:
+        return False
 
 def load_portfolio(table_name):
     """
@@ -147,16 +218,12 @@ def save_portfolio(table_name, df):
     except Exception as e:
         st.error(f"Database Save Error ({table_name}): {e}")
 
-# เริ่มต้นสร้าง Database (รันครั้งแรก)
-if not os.path.exists(DB_FILE):
+# เริ่มต้นสร้าง Database (รันทุกครั้ง — ปลอดภัยเพราะทุก CREATE ใช้ IF NOT EXISTS
+# จึงสร้างเฉพาะตารางที่ยังไม่มี เช่น watchlist ที่เพิ่มใหม่ โดยไม่กระทบข้อมูลพอร์ตเดิม)
+try:
     init_db()
-else:
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        conn.close()
-    except sqlite3.Error as e:
-        print(f"DB file corrupted or unreadable, recreating: {e}")
-        init_db()
+except sqlite3.Error as e:
+    print(f"DB init error: {e}")
 
 journal.init_journal_db()  # 📓 สร้างตาราง trade_journal ถ้ายังไม่มี (ปลอดภัย ใช้ IF NOT EXISTS)
 news.init_news_db()  # 📰 สร้างตาราง news_flags ถ้ายังไม่มี (ปลอดภัย ใช้ IF NOT EXISTS)
@@ -195,6 +262,16 @@ class PennyStockQualityBatch(BaseModel):
 # --- 🔄 ระบบจำข้อมูลและสถานะเว็บ ---
 if 'active_ticker' not in st.session_state:
     st.session_state.active_ticker = "AAPL"
+
+# 🖱️ รองรับการคลิกการ์ดหุ้น: การ์ดแต่ละใบเป็นลิงก์ ?view=TICKER พอคลิกจะมาตั้ง active_ticker
+# ให้กราฟใหญ่ด้านบนอัปเดตทันที แล้วล้าง query param ทิ้งเพื่อไม่ให้ค้างเวลารีเฟรช
+_view_ticker = st.query_params.get("view")
+if _view_ticker:
+    st.session_state.active_ticker = str(_view_ticker).strip().upper()
+    st.session_state.ai_debate_result = None
+    st.session_state.chat_history = []
+    st.query_params.clear()
+
 if 'ai_debate_result' not in st.session_state:
     st.session_state.ai_debate_result = None
 if 'timeframe' not in st.session_state:
@@ -234,7 +311,36 @@ st.markdown("""
     }
     
     html, body, [class*="css"] { font-family: 'JetBrains Mono', monospace; }
-    .stApp { background-color: var(--bg); color: var(--text); }
+
+    /* 🌌 Aurora background: ไล่สีน้ำเงิน-ม่วง-เขียวเข้มฟุ้งๆ แทนพื้นดำล้วน ให้มีมิติสีมากขึ้น
+       ใช้ radial-gradient หลายชั้นซ้อนกัน + เคลื่อนไหวช้ามากๆ (30 วิ/รอบ) แบบ subtle
+       โทนเข้มพอให้ข้อมูล/ตัวเลขยังอ่านออกชัด ไม่ตีกับเนื้อหา */
+    .stApp {
+        background-color: #070910;
+        background-image:
+            radial-gradient(ellipse 80% 55% at 15% 8%, rgba(37,99,235,0.20), transparent 60%),
+            radial-gradient(ellipse 70% 50% at 85% 12%, rgba(139,92,246,0.16), transparent 60%),
+            radial-gradient(ellipse 90% 60% at 75% 88%, rgba(16,120,110,0.16), transparent 62%),
+            radial-gradient(ellipse 60% 45% at 10% 92%, rgba(79,70,229,0.14), transparent 60%);
+        background-attachment: fixed;
+        color: var(--text);
+    }
+    /* ชั้น aurora เคลื่อนไหวเบาๆ ทับด้านหลังสุด (ไม่รบกวนการคลิก) */
+    .stApp::before {
+        content: ""; position: fixed; inset: -20%; z-index: -1; pointer-events: none;
+        background-image:
+            radial-gradient(circle at 30% 40%, rgba(59,130,246,0.10), transparent 45%),
+            radial-gradient(circle at 70% 60%, rgba(16,185,129,0.08), transparent 45%);
+        filter: blur(40px);
+        animation: aurora-drift 30s ease-in-out infinite alternate;
+    }
+    @keyframes aurora-drift {
+        0% { transform: translate(0, 0) scale(1); }
+        50% { transform: translate(3%, -2%) scale(1.08); }
+        100% { transform: translate(-2%, 3%) scale(1.03); }
+    }
+    @media (prefers-reduced-motion: reduce) { .stApp::before { animation: none; } }
+
     h1, h2, h3, h4 { font-family: 'Space Grotesk', sans-serif !important; letter-spacing: -0.02em; }
     
     .prop-card { background-color: var(--panel); border: 1px solid var(--border); padding: 16px; border-radius: 12px; margin-bottom: 15px; }
@@ -291,7 +397,222 @@ st.markdown("""
     .tag-reversal-medium { background: rgba(16,185,129,0.14); color: var(--green); border: 1.5px solid rgba(16,185,129,0.45); }
     .tag-takeprofit-short { background: rgba(217,119,87,0.22); color: #f0a085; border: 1px solid rgba(217,119,87,0.55); }
     .tag-takeprofit-medium { background: rgba(217,119,87,0.14); color: var(--claude); border: 1.5px solid rgba(217,119,87,0.45); }
+
+    /* ============================================
+       ✨ ธีม widget มาตรฐานของ Streamlit ให้เข้ากับการ์ดที่มีอยู่แล้ว
+       ============================================ */
+
+    /* Hero header */
+    .app-hero {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 18px 24px; margin-bottom: 14px; border-radius: 14px;
+        background: linear-gradient(120deg, rgba(59,130,246,0.14), rgba(139,92,246,0.06) 40%, rgba(16,185,129,0.10));
+        border: 1px solid rgba(148,163,184,0.16);
+        backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    }
+    .app-hero-title { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 1.5rem; color: var(--text); letter-spacing: -0.01em; }
+    .app-hero-title span { color: var(--verdict); }
+    .app-hero-sub { color: #7b8494; font-size: 0.78rem; margin-top: 3px; }
+    .app-hero-live { display: flex; align-items: center; gap: 7px; font-size: 0.72rem; color: var(--green); font-family: 'JetBrains Mono', monospace; letter-spacing: 0.04em; }
+    .app-hero-live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 0 rgba(16,185,129,0.6); animation: pulse-dot 2s infinite; }
+    @keyframes pulse-dot {
+        0% { box-shadow: 0 0 0 0 rgba(16,185,129,0.55); }
+        70% { box-shadow: 0 0 0 7px rgba(16,185,129,0); }
+        100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); }
+    }
+
+    /* Buttons */
+    div[data-testid="stButton"] button, div[data-testid="stFormSubmitButton"] button {
+        border-radius: 8px; font-family: 'Space Grotesk', sans-serif; font-weight: 600;
+        border: 1px solid var(--border); transition: all 0.15s ease;
+    }
+    div[data-testid="stButton"] button[kind="primary"] {
+        background: linear-gradient(135deg, #d9b46a, var(--verdict)); color: #14110a; border: none;
+        box-shadow: 0 2px 10px rgba(201,168,106,0.25);
+    }
+    div[data-testid="stButton"] button[kind="primary"]:hover {
+        box-shadow: 0 3px 16px rgba(201,168,106,0.4); transform: translateY(-1px);
+    }
+    div[data-testid="stButton"] button[kind="secondary"] { background: var(--panel-2); color: var(--text); }
+    div[data-testid="stButton"] button[kind="secondary"]:hover { border-color: var(--verdict); color: var(--verdict); }
+
+    /* Tabs */
+    div[data-testid="stTabs"] button[data-baseweb="tab"] {
+        font-family: 'Space Grotesk', sans-serif; font-weight: 600; color: #7b8494;
+    }
+    div[data-testid="stTabs"] button[aria-selected="true"] { color: var(--verdict) !important; }
+    div[data-testid="stTabs"] [data-baseweb="tab-highlight"] {
+        background: linear-gradient(90deg, var(--gemini), var(--verdict), var(--claude)) !important; height: 2.5px !important;
+    }
+    div[data-testid="stTabs"] [data-baseweb="tab-border"] { background: var(--border) !important; }
+
+    /* Select / Multiselect / Text input / Number input */
+    div[data-baseweb="select"] > div, div[data-testid="stTextInput"] input, div[data-testid="stNumberInput"] input {
+        background-color: var(--panel-2) !important; border-color: var(--border) !important; border-radius: 8px !important;
+    }
+    div[data-baseweb="select"] > div:focus-within, div[data-testid="stTextInput"] input:focus, div[data-testid="stNumberInput"] input:focus {
+        border-color: var(--verdict) !important; box-shadow: 0 0 0 1px var(--verdict) !important;
+    }
+    div[data-baseweb="tag"] { background-color: rgba(201,168,106,0.18) !important; color: var(--verdict) !important; }
+
+    /* Checkbox / Radio accent */
+    label[data-baseweb="checkbox"] span:first-child, div[data-testid="stCheckbox"] span[data-checked] {
+        accent-color: var(--verdict);
+    }
+
+    /* Dataframe / tables */
+    div[data-testid="stDataFrame"] { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+
+    /* Alert boxes (info/warning/error/success) */
+    div[data-testid="stAlertContainer"] { background-color: var(--panel) !important; border-radius: 10px; border: 1px solid var(--border); }
+
+    /* Sidebar */
+    section[data-testid="stSidebar"] { background-color: var(--panel); border-right: 1px solid var(--border); }
+
+    /* Sliders */
+    div[data-testid="stSlider"] [role="slider"] { background-color: var(--verdict) !important; }
+    div[data-testid="stSlider"] div[style*="background-color: rgb(255, 75, 75)"] { background: var(--verdict) !important; }
+
+    /* Metric */
+    div[data-testid="stMetric"] { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; }
+
+    /* 🎴 Photo-led stock card grid (ตารางผลสแกนแบบการ์ด) */
+    .stock-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; margin: 10px 0 6px; }
+    .stock-card-link { text-decoration: none !important; color: inherit !important; display: block; }
+    .stock-card { border-radius: 10px; overflow: hidden; border: 1px solid rgba(148,163,184,0.14); background: rgba(20,26,38,0.72); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease; cursor: pointer; }
+    .stock-card-link:hover .stock-card { transform: translateY(-3px); border-color: var(--verdict); box-shadow: 0 6px 20px rgba(0,0,0,0.35); }
+    .stock-card-visual { height: 76px; position: relative; }
+    .stock-card-visual.dir-buy { background: linear-gradient(135deg, rgba(16,185,129,0.55), rgba(16,185,129,0.04) 75%), var(--panel-2); }
+    .stock-card-visual.dir-sell { background: linear-gradient(135deg, rgba(239,68,68,0.55), rgba(239,68,68,0.04) 75%), var(--panel-2); }
+    .stock-card-visual.dir-neutral { background: linear-gradient(135deg, rgba(123,132,148,0.35), rgba(123,132,148,0.03) 75%), var(--panel-2); }
+    .spark-svg { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0.9; }
+    .stock-card-score-chip {
+        position: absolute; top: 8px; right: 8px; background: rgba(10,12,16,0.55); backdrop-filter: blur(2px);
+        color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; font-weight: 600;
+        padding: 3px 8px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.12);
+    }
+    .stock-card-body { padding: 12px 14px 14px; }
+    .stock-card-eyebrow { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.07em; color: #7b8494; font-family: 'JetBrains Mono', monospace; margin-bottom: 5px; }
+    .stock-card-title { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 1.25rem; letter-spacing: -0.01em; margin-bottom: 5px; }
+    .stock-card-desc { font-size: 0.74rem; color: #a8b0bd; line-height: 1.45; }
+    .stock-card-cta {
+        font-size: 0.66rem; font-family: 'Space Grotesk', sans-serif; font-weight: 600; color: var(--verdict);
+        text-align: center; padding: 7px; border-top: 1px solid var(--border);
+        background: rgba(201,168,106,0.06); opacity: 0; max-height: 0; transition: all 0.15s ease;
+    }
+    .stock-card-link:hover .stock-card-cta { opacity: 1; max-height: 40px; }
+
+    /* ป้ายเรตติ้งบนการ์ด (มุมซ้ายบนของแถบ visual) */
+    .stock-card-badge {
+        position: absolute; top: 8px; left: 8px; z-index: 2;
+        font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 0.6rem; letter-spacing: 0.06em;
+        padding: 3px 8px; border-radius: 5px; text-transform: uppercase; backdrop-filter: blur(2px);
+    }
+    .badge-strong-buy { background: rgba(16,185,129,0.9); color: #06281c; }
+    .badge-buy { background: rgba(16,185,129,0.28); color: #6ee7a0; border: 1px solid rgba(16,185,129,0.5); }
+    .badge-neutral { background: rgba(123,132,148,0.28); color: #cbd5e1; border: 1px solid rgba(123,132,148,0.5); }
+    .badge-sell { background: rgba(239,68,68,0.28); color: #fca5a5; border: 1px solid rgba(239,68,68,0.5); }
+    .badge-strong-sell { background: rgba(239,68,68,0.9); color: #2a0808; }
+
+    /* จุด live กะพริบที่ปลายเส้น sparkline (ราคาล่าสุด) */
+    .spark-live-pulse { transform-box: fill-box; transform-origin: center; animation: spark-pulse 1.8s ease-out infinite; }
+    @keyframes spark-pulse {
+        0% { r: 2.6; opacity: 0.9; stroke-width: 1.2; }
+        70% { r: 8; opacity: 0; stroke-width: 0.4; }
+        100% { r: 8; opacity: 0; }
+    }
+    .spark-live-dot { animation: spark-dot-glow 1.8s ease-in-out infinite; }
+    @keyframes spark-dot-glow { 0%, 100% { opacity: 0.75; } 50% { opacity: 1; } }
+
+    /* fade+slide การ์ดตอนโผล่ (เล่นครั้งเดียว ไม่วนซ้ำ) */
+    .stock-card-link { animation: card-appear 0.4s ease-out backwards; }
+    @keyframes card-appear {
+        from { opacity: 0; transform: translateY(14px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    /* ปิด animation ให้ผู้ที่ตั้งค่าลดการเคลื่อนไหว (accessibility) */
+    @media (prefers-reduced-motion: reduce) {
+        .stock-card-link, .spark-live-pulse, .spark-live-dot { animation: none !important; }
+    }
+
+    /* 💀 Skeleton loading card (shimmer ระหว่างรอสแกน) */
+    .skeleton-card { border-radius: 10px; overflow: hidden; border: 1px solid rgba(148,163,184,0.14); background: rgba(20,26,38,0.72); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+    .skeleton-visual { height: 76px; background: var(--panel-2); }
+    .skeleton-body { padding: 12px 14px 16px; }
+    .skeleton-line { height: 10px; border-radius: 5px; margin-bottom: 9px; background: var(--panel-2); }
+    .skeleton-line.w40 { width: 40%; } .skeleton-line.w60 { width: 60%; } .skeleton-line.w80 { width: 80%; }
+    .skeleton-visual, .skeleton-line {
+        background: linear-gradient(90deg, var(--panel-2) 25%, rgba(255,255,255,0.06) 50%, var(--panel-2) 75%);
+        background-size: 200% 100%; animation: shimmer 1.3s infinite;
+    }
+    @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+    /* 🎴 Verdict card wrapper (ใช้ visual/body class ร่วมกับ stock-card เพื่อความสอดคล้องกันทั้งแอป) */
+    .verdict-card-wrap { border-radius: 12px; overflow: hidden; border: 1px solid rgba(201,168,106,0.5); background: rgba(20,26,38,0.72); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); margin-bottom: 14px; }
+
+    /* Expander */
+    div[data-testid="stExpander"] { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
+
+    /* Scrollbar polish */
+    ::-webkit-scrollbar { width: 9px; height: 9px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--verdict); }
+
+    /* 📱 Responsive: จอมือถือ/แท็บเล็ตแคบ (Streamlit จัดการ st.columns ให้เองแล้ว
+       ส่วนนี้แก้เฉพาะ layout ที่เขียนเอง (flex/grid) ซึ่งไม่ยุบให้อัตโนมัติ) */
+    @media (max-width: 640px) {
+        .plan-grid { grid-template-columns: 1fr !important; }
+        .app-hero { flex-direction: column; align-items: flex-start; gap: 10px; }
+        .app-hero-live { align-self: flex-start; }
+        .vs-banner { flex-direction: column; }
+        .vs-gemini { border-right: none; border-bottom: 1px solid var(--border); }
+        .stock-card-grid { grid-template-columns: 1fr !important; }
+    }
 </style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# 🎨 ICON SYSTEM (Lucide SVG แทน emoji ที่หัวข้อ/ปุ่ม)
+# ==========================================
+# เก็บ path ของแต่ละไอคอนไว้ตรงกลาง เรียกใช้ผ่าน icon() แทนการเขียน SVG ยาวๆ ซ้ำทุกจุด
+# ทั้งหมดมาจาก Lucide (lucide.dev) เป็น open-source ใช้ได้อิสระ สไตล์เส้นบางมินิมอลเข้ากับธีม
+_LUCIDE_PATHS = {
+    "chart-line": '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="m19 9-5 5-4-4-3 3"/>',
+    "flame": '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
+    "briefcase": '<path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/>',
+    "star": '<path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.12 2.12 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.12 2.12 0 0 0-.61 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.12 2.12 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.12 2.12 0 0 0-.61-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.12 2.12 0 0 0 1.597-1.16z"/>',
+    "search": '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+    "brain": '<path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/>',
+    "notebook": '<path d="M2 6h4"/><path d="M2 10h4"/><path d="M2 14h4"/><path d="M2 18h4"/><rect width="16" height="20" x="4" y="2" rx="2"/><path d="M16 2v20"/>',
+    "coins": '<circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="m16.71 13.88.7.71-2.82 2.82"/>',
+    "trending-up": '<path d="M16 7h6v6"/><path d="m22 7-8.5 8.5-5-5L2 17"/>',
+    "trending-down": '<path d="M16 17h6v-6"/><path d="m22 17-8.5-8.5-5 5L2 7"/>',
+    "zap": '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>',
+    "trash": '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+    "plus": '<path d="M5 12h14"/><path d="M12 5v14"/>',
+}
+
+def lucide(name, size=20, color="currentColor", va=-3, mr=7):
+    """คืน SVG string ของไอคอน Lucide ตามชื่อ ใช้แทรกในหัวข้อ/ปุ่มแทน emoji
+    va = vertical-align (px), mr = margin-right (px)"""
+    paths = _LUCIDE_PATHS.get(name, "")
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 24 24" '
+        f'fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
+        f'style="vertical-align:{va}px; margin-right:{mr}px;">{paths}</svg>'
+    )
+
+
+# --- 🎬 HERO HEADER ---
+st.markdown("""
+<div class="app-hero">
+    <div>
+        <div class="app-hero-title">◆ PropFirmX <span>Terminal</span></div>
+        <div class="app-hero-sub">AI Debate Terminal — Gemini × Claude · Shared Portfolio & Signal Scanner</div>
+    </div>
+    <div class="app-hero-live"><span class="dot"></span> LIVE MARKET DATA</div>
+</div>
 """, unsafe_allow_html=True)
 
 # --- 🔄 1. ระบบ GENERATE TICKER TAPE ---
@@ -316,10 +637,9 @@ ticker_tape_html = f"""
 components.html(ticker_tape_html, height=50)
 
 # --- 🛠️ Helper Functions ---
-def fetch_data_with_header(url, timeout=10):
-    """เพิ่ม timeout ป้องกัน request ค้างไม่มีกำหนดเวลาเน็ตมีปัญหาหรือปลายทางไม่ตอบ (ทำแอปแขวนทั้งหน้า)"""
+def fetch_data_with_header(url):
     req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-    with urllib.request.urlopen(req, timeout=timeout) as response:
+    with urllib.request.urlopen(req) as response: 
         return response.read()
 
 @st.cache_data(ttl=86400)  # cache 1 วัน รายชื่อหุ้นที่จดทะเบียนไม่เปลี่ยนบ่อย
@@ -455,57 +775,24 @@ def get_market_regime(index_ticker):
     return _get_market_regime_raw(index_ticker)
 
 
-def _download_chunk_with_retry(tickers_str):
-    """
-    ดึงราคาหุ้นจาก yfinance พร้อม retry แบบ exponential backoff (สั้นกว่า AI call เพราะไม่มีค่าใช้จ่ายต่อครั้ง
-    แค่ต้องการทนต่อ rate-limit/เน็ตสะดุดชั่วคราวของ Yahoo Finance เท่านั้น)
-    """
-    delays = [1, 2, 4]
-    last_err = None
-    for delay in delays:
-        try:
-            return yf.download(tickers_str, period="3mo", interval="1d", group_by="ticker",
-                                auto_adjust=False, progress=False, threads=True)
-        except Exception as e:
-            last_err = e
-            time.sleep(delay)
-    # พยายามครั้งสุดท้าย ถ้ายังพังให้ปล่อย exception ออกไปให้ผู้เรียก (scan_market_batch) จัดการเป็นราย chunk
-    return yf.download(tickers_str, period="3mo", interval="1d", group_by="ticker",
-                        auto_adjust=False, progress=False, threads=True)
-
-
 def scan_market_batch(tickers_list, is_penny=False, market_type="US"):
     """
     กวาดสแกนหุ้นทั้งหมดในลิสต์โดยคำนวณสัญญาณมาตรฐานและแท็กกลยุทธ์ Reversal / Take Profit ทั้งระยะสั้นและระยะกลาง
     market_type: "US" / "TH" / "Crypto" — ใช้เลือกดัชนีอ้างอิงเช็คภาวะตลาดรวม (Market Regime)
-
-    🔧 แก้บั๊ก "สแกนไม่ติดบ้าง/error บ้าง": เดิมยิง yf.download() ก้อนเดียวรวดสำหรับ ticker ทั้งหมด (มากสุด ~250 ตัว
-    ตอน universe scan) ถ้า Yahoo rate-limit หรือเน็ตสะดุดแค่ครั้งเดียวระหว่างโหลด การสแกนทั้งรอบจะพังหมดทันที
-    ไม่เหลือผลลัพธ์อะไรเลย เปลี่ยนมาแบ่งเป็น chunk ละ 50 ตัว + retry ต่อ chunk แทน ถ้า chunk ไหนพังก็ข้ามไปแค่
-    chunk นั้น ไม่ทำให้ผลลัพธ์จาก chunk อื่นหายไปด้วย
     """
     results = []
     scan_pool = tickers_list
-    CHUNK_SIZE = 50
-    chunks = [scan_pool[i:i + CHUNK_SIZE] for i in range(0, len(scan_pool), CHUNK_SIZE)]
-    failed_chunks = 0
+    tickers_str = " ".join(scan_pool)
 
     # 🌍 เช็คภาวะตลาดรวมครั้งเดียวก่อนสแกน (ไม่ต้องเช็คซ้ำทุกตัว ประหยัด request และเร็วขึ้นมาก)
     regime_ticker = MARKET_REGIME_INDEX.get(market_type)
     regime_info = get_market_regime(regime_ticker) if regime_ticker else {"regime": None}
     regime = regime_info.get("regime")
 
-    for chunk in chunks:
-        tickers_str = " ".join(chunk)
-        try:
-            # โหลดข้อมูลย้อนหลัง 3 เดือน เพื่อความแม่นยำและเสถียรภาพตัวชี้วัด (RSI14, RSI7, EMA20, EMA50)
-            raw_df = _download_chunk_with_retry(tickers_str)
-        except Exception as e:
-            print(f"Chunk download failed ({len(chunk)} tickers): {e}")
-            failed_chunks += 1
-            continue
-
-        for ticker in chunk:
+    try:
+        # โหลดข้อมูลย้อนหลัง 3 เดือน เพื่อความแม่นยำและเสถียรภาพตัวชี้วัด (RSI14, RSI7, EMA20, EMA50)
+        raw_df = yf.download(tickers_str, period="3mo", interval="1d", group_by="ticker", auto_adjust=False, progress=False, threads=True)
+        for ticker in scan_pool:
             try:
                 if isinstance(raw_df.columns, pd.MultiIndex):
                     if ticker in raw_df.columns.get_level_values(0):
@@ -640,6 +927,18 @@ def scan_market_batch(tickers_list, is_penny=False, market_type="US"):
 
                 # บันทึกข้อมูลเฉพาะตัวที่มีแท็กสัญญาณหรือแท็กกลยุทธ์
                 if signals or strategy_tags:
+                    # 📈 เตรียมข้อมูล sparkline: ย่อราคา Close ย้อนหลัง 3 เดือนให้เหลือ ~24 จุด
+                    # (ใช้ข้อมูลจาก batch เดิมที่ดึงมาแล้ว ไม่ยิง request เพิ่ม ไม่กระทบความเร็ว)
+                    try:
+                        closes = close.dropna().tolist()
+                        if len(closes) > 24:
+                            step = len(closes) / 24.0
+                            spark = [round(closes[min(int(i * step), len(closes) - 1)], 2) for i in range(24)]
+                        else:
+                            spark = [round(x, 2) for x in closes]
+                    except Exception:
+                        spark = []
+
                     results.append({
                         "ticker": ticker,
                         "price": round(c, 2),
@@ -654,21 +953,16 @@ def scan_market_batch(tickers_list, is_penny=False, market_type="US"):
                         "rating_icon": rating["icon"],
                         "rating_score": rating["score"],
                         "rating_votes": rating["votes"],
+                        "sparkline": spark,
                     })
             except Exception as e:
                 print(f"Error scanning {ticker}: {e}")
                 continue
-
-    # เรียงตามความเด่นของสัญญาณ (เรียงหลังรวมผลจากทุก chunk แล้ว)
-    results.sort(key=lambda x: x["signal_count"], reverse=True)
-
-    # แจ้งเตือนถ้ามีบาง chunk ดึงข้อมูลไม่สำเร็จ แต่ยังคงผลลัพธ์จาก chunk ที่สำเร็จไว้ให้ครบ
-    # (เดิมถ้าพังแม้แค่ครั้งเดียวจะเสียผลลัพธ์ทั้งหมดของรอบสแกนนั้นไปเลย)
-    if failed_chunks:
-        st.sidebar.warning(
-            f"⚠️ ดึงข้อมูลบางส่วนไม่สำเร็จ ({failed_chunks}/{len(chunks)} ชุด ~{failed_chunks * CHUNK_SIZE} หุ้น) "
-            "ผลสแกนรอบนี้อาจไม่ครบทุกตัว ลองสแกนซ้ำอีกครั้งถ้าอยากได้ผลครบ"
-        )
+                
+        # เรียงตามความเด่นของสัญญาณ
+        results.sort(key=lambda x: x["signal_count"], reverse=True)
+    except Exception as e:
+        st.sidebar.error(f"เกิดข้อผิดพลาดในการสแกนตลาด: {e}")
     return results
 
 # ==========================================
@@ -1139,7 +1433,30 @@ current_p, change_pct, rsi_v, ma20_v, bb_upper_v, bb_lower_v, macd_hist, vol_rat
 col_left_main, col_right_panel = st.columns([3, 1])
 
 with col_left_main:
-    st.markdown(f"#### 📈 Live Market Technical Chart: <span style='color:#38bdf8;'>{ticker}</span> ({st.session_state.timeframe})", unsafe_allow_html=True)
+    hdr_col, star_col = st.columns([4, 1])
+    with hdr_col:
+        st.markdown(f"#### {lucide('chart-line', size=22, color='#38bdf8')}Live Market Technical Chart: <span style='color:#38bdf8;'>{ticker}</span> ({st.session_state.timeframe})", unsafe_allow_html=True)
+    with star_col:
+        # ⭐ ปุ่มเพิ่ม/ลบหุ้นปัจจุบันเข้า watchlist (เดาตลาดจากรูปแบบ ticker)
+        if ticker.endswith(".BK"):
+            _tk_market = "TH"
+        elif "-USD" in ticker:
+            _tk_market = "Crypto"
+        else:
+            _tk_market = "US"
+        _in_wl = is_in_watchlist(ticker)
+        if _in_wl:
+            if st.button("★ อยู่ใน Watchlist", key="wl_toggle_chart", use_container_width=True,
+                         help="กดเพื่อเอาออกจาก Watchlist"):
+                remove_from_watchlist(ticker)
+                st.toast(f"เอา {ticker} ออกจาก Watchlist แล้ว", icon="☆")
+                st.rerun()
+        else:
+            if st.button("☆ เพิ่มเข้า Watchlist", key="wl_toggle_chart", use_container_width=True, type="primary",
+                         help="กดเพื่อเพิ่มเข้า Watchlist"):
+                add_to_watchlist(ticker, _tk_market)
+                st.toast(f"เพิ่ม {ticker} เข้า Watchlist แล้ว", icon="⭐")
+                st.rerun()
 
     col_ind_select, col_refresh = st.columns([3, 1])
     with col_ind_select:
@@ -1166,7 +1483,7 @@ with col_left_main:
     _live_chart_fragment()
 
 with col_right_panel:
-    st.markdown("#### 🔥 ความร้อนแรงรายวัน")
+    st.markdown(f"#### {lucide('flame', size=20, color='#d97757')}ความร้อนแรงรายวัน", unsafe_allow_html=True)
     asset_select = st.selectbox("เลือกประเภทสินทรัพย์หลัก", ["US Stocks", "Thai Stocks", "Cryptocurrency"])
     
     asset_map = {"US Stocks": "US", "Thai Stocks": "TH", "Cryptocurrency": "Crypto"}
@@ -1192,12 +1509,125 @@ st.divider()
 
 
 # 2️⃣ BOTTOM SECTION: แท็บหน้าต่างแยกจัดการพอร์ต / สแกนเนอร์ และระบบ AI DEBATE
-st.markdown("### 💼 ระบบจัดการพอร์ต (แชร์ร่วมกัน) และสแกนเนอร์สมองกล")
+st.markdown(f"### {lucide('briefcase', size=24, color='#c9a86a')}ระบบจัดการพอร์ต (แชร์ร่วมกัน) และสแกนเนอร์สมองกล", unsafe_allow_html=True)
 
-tab_us_class, tab_th_class, tab_crypto_class, tab_journal_class = st.tabs([
-    "🇺🇸 หุ้นอเมริกา (US Stocks)", "🇹🇭 หุ้นไทย (Thai Stocks)",
+tab_watchlist, tab_us_class, tab_th_class, tab_crypto_class, tab_journal_class = st.tabs([
+    "⭐ Watchlist", "🇺🇸 หุ้นอเมริกา (US Stocks)", "🇹🇭 หุ้นไทย (Thai Stocks)",
     "🪙 คริปโทเคอร์เรนซี (Cryptocurrency)", "📓 Trade Journal & Win Rate"
 ])
+
+def _build_sparkline_svg(prices, direction):
+    """สร้าง SVG sparkline เล็กๆ จาก list ราคา คืนสตริง SVG (บรรทัดเดียว ไม่มี indent)
+    direction: 'dir-buy'/'dir-sell'/'dir-neutral' ใช้เลือกสีเส้น"""
+    if not prices or len(prices) < 2:
+        return ""
+    stroke = {"dir-buy": "#34d399", "dir-sell": "#f87171", "dir-neutral": "#94a3b8"}.get(direction, "#94a3b8")
+    w, h, pad = 210.0, 76.0, 8.0
+    lo, hi = min(prices), max(prices)
+    span = (hi - lo) or 1.0
+    n = len(prices)
+    pts = []
+    for i, p in enumerate(prices):
+        x = pad + (w - 2 * pad) * (i / (n - 1))
+        y = pad + (h - 2 * pad) * (1 - (p - lo) / span)  # ราคาสูง = y น้อย (อยู่บน)
+        pts.append((round(x, 1), round(y, 1)))
+    line_pts = " ".join(f"{x},{y}" for x, y in pts)
+    # พื้นที่ใต้เส้น (area fill จางๆ) ปิดขอบล่าง
+    area_pts = f"{pad},{h - pad} " + line_pts + f" {w - pad},{h - pad}"
+    last_x, last_y = pts[-1]  # จุดสุดท้าย = ราคาล่าสุด ใช้วางจุด live กะพริบ
+    return (
+        f'<svg class="spark-svg" viewBox="0 0 {int(w)} {int(h)}" preserveAspectRatio="none">'
+        f'<polyline points="{area_pts}" fill="{stroke}" fill-opacity="0.12" stroke="none"/>'
+        f'<polyline points="{line_pts}" fill="none" stroke="{stroke}" stroke-width="1.6" '
+        f'stroke-linejoin="round" stroke-linecap="round"/>'
+        f'<circle class="spark-live-pulse" cx="{last_x}" cy="{last_y}" r="2.6" fill="none" stroke="{stroke}" stroke-width="1.2"/>'
+        f'<circle class="spark-live-dot" cx="{last_x}" cy="{last_y}" r="2.6" fill="{stroke}"/>'
+        f'</svg>'
+    )
+
+
+def render_watchlist_tab():
+    """แสดงหุ้นใน Watchlist เป็นการ์ดกริด (สไตล์เดียวกับผลสแกน) พร้อมปุ่มดูกราฟ/ลบ"""
+    st.markdown(f"#### {lucide('star', size=20, color='#c9a86a')}หุ้นที่จับตา (Watchlist)", unsafe_allow_html=True)
+    st.caption("เพิ่มหุ้นเข้า Watchlist ได้จากปุ่ม ☆ ใต้หัวข้อกราฟด้านบน · กดการ์ดเพื่อดูกราฟ")
+
+    wl = load_watchlist()
+    if not wl:
+        st.info("ยังไม่มีหุ้นใน Watchlist — พิมพ์ ticker ที่ช่องค้นหาด้านบน แล้วกดปุ่ม ☆ เพิ่มเข้า Watchlist ได้เลย")
+        return
+
+    # เพิ่ม/ลบด่วนจากช่องพิมพ์ (เผื่ออยากเพิ่มหลายตัวรวดเดียวไม่ต้องเปิดกราฟทีละตัว)
+    add_col1, add_col2 = st.columns([3, 1])
+    with add_col1:
+        new_tk = st.text_input("เพิ่มหุ้นเข้า Watchlist เร็วๆ (เช่น AAPL, PTT.BK, BTC-USD):", key="wl_quick_add").strip().upper()
+    with add_col2:
+        st.write("")
+        if st.button("➕ เพิ่ม", key="wl_quick_add_btn", use_container_width=True, type="primary"):
+            if new_tk:
+                m = "TH" if new_tk.endswith(".BK") else "Crypto" if "-USD" in new_tk else "US"
+                add_to_watchlist(new_tk, m)
+                st.toast(f"เพิ่ม {new_tk} แล้ว", icon="⭐")
+                st.rerun()
+
+    st.markdown(f"**มีหุ้นใน Watchlist ทั้งหมด {len(wl)} ตัว**")
+
+    # ดึงราคา+เรตติ้งของหุ้นใน watchlist มาแสดงเป็นการ์ด (ใช้ระบบเรตติ้งเดียวกับสแกนเนอร์)
+    wl_data = scan_market_batch(wl, is_penny=False, market_type="US")
+    # scan_market_batch เก็บเฉพาะตัวที่มีสัญญาณ — แต่ watchlist อยากเห็นทุกตัว จึงเติมตัวที่ไม่มีสัญญาณกลับเข้ามา
+    found_tickers = {r["ticker"] for r in wl_data}
+    for tk in wl:
+        if tk not in found_tickers:
+            wl_data.append({"ticker": tk, "price": 0.0, "change_pct": 0.0, "rating_code": "NEUTRAL",
+                            "rating_label": "-", "rating_icon": "⚪", "rating_score": 0.0,
+                            "strategy_tags": [], "signals": [], "sparkline": []})
+
+    rating_badge_map = {
+        "STRONG_BUY": ("STRONG BUY", "badge-strong-buy"), "BUY": ("BUY", "badge-buy"),
+        "NEUTRAL": ("NEUTRAL", "badge-neutral"), "SELL": ("SELL", "badge-sell"),
+        "STRONG_SELL": ("STRONG SELL", "badge-strong-sell"),
+    }
+    cards_html = ['<div class="stock-card-grid">']
+    for idx, r in enumerate(wl_data):
+        code = str(r.get("rating_label", ""))
+        direction = "dir-buy" if "ซื้อ" in code else "dir-sell" if "ขาย" in code else "dir-neutral"
+        spark_svg = _build_sparkline_svg(r.get("sparkline", []), direction)
+        _tk = r["ticker"]
+        badge_text, badge_cls = rating_badge_map.get(r.get("rating_code", ""), ("", "badge-neutral"))
+        change = r.get("change_pct", 0.0)
+        change_str = f"🟢 +{change:.2f}%" if change >= 0 else f"🔴 {change:.2f}%"
+        price_str = f"${r['price']:,.2f}" if r.get("price") else "—"
+        delay = f"{min(idx, 12) * 0.045:.3f}s"
+        card = (
+            f'<a class="stock-card-link" href="?view={_tk}" target="_self" style="animation-delay:{delay};">'
+            '<div class="stock-card">'
+            f'<div class="stock-card-visual {direction}">'
+            f'{spark_svg}'
+            f'<div class="stock-card-badge {badge_cls}">{badge_text}</div>'
+            f'<div class="stock-card-score-chip">{r["rating_icon"]} {r["rating_score"]:+.2f}</div>'
+            '</div>'
+            '<div class="stock-card-body">'
+            f'<div class="stock-card-eyebrow">{change_str} &nbsp;·&nbsp; ⭐ WATCHLIST</div>'
+            f'<div class="stock-card-title">{_tk}</div>'
+            f'<div class="stock-card-desc">{price_str} &nbsp;·&nbsp; {r["rating_label"]}</div>'
+            '</div>'
+            '<div class="stock-card-cta">📈 กดเพื่อดูกราฟ</div>'
+            '</div>'
+            '</a>'
+        )
+        cards_html.append(card)
+    cards_html.append('</div>')
+    st.markdown("".join(cards_html), unsafe_allow_html=True)
+
+    # ปุ่มลบ (แยกจากการ์ด เพราะการ์ดเป็นลิงก์ดูกราฟ กดลบในการ์ดจะสับสน)
+    st.markdown(f"###### {lucide('trash', size=15, color='#94a3b8')}เอาหุ้นออกจาก Watchlist", unsafe_allow_html=True)
+    remove_cols = st.columns(4)
+    for i, tk in enumerate(wl):
+        with remove_cols[i % 4]:
+            if st.button(f"✕ {tk}", key=f"wl_rm_{tk}", use_container_width=True):
+                remove_from_watchlist(tk)
+                st.toast(f"เอา {tk} ออกแล้ว", icon="🗑️")
+                st.rerun()
+
 
 def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, default_scanned_df, is_penny=False, postfix=""):
     # เก็บผลสแกนแยกตามแท็บ (portfolio_key) ไม่ใช้ key กลางร่วมกันทุกแท็บแบบเดิม
@@ -1233,7 +1663,7 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
             unsafe_allow_html=True
         )
 
-        st.markdown("##### 🔍 ตัวเลือกสแกนตลาดสมองกล")
+        st.markdown(f"##### {lucide('search', size=18, color='#38bdf8')}ตัวเลือกสแกนตลาดสมองกล", unsafe_allow_html=True)
         scanner_type = st.selectbox("เลือกดัชนีคัดกรองเฉพาะด้าน:", scanner_market_list, key=f"select_scan_{portfolio_key}")
         use_ai_quality = st.checkbox(
             "🛡️ ให้ AI ช่วยประเมินคุณภาพหุ้นที่เจอเพิ่มเติม (ใช้ Gemini เพิ่ม 1 รอบ อาจช้าลงนิดหน่อย)",
@@ -1245,6 +1675,15 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
             is_penny_mode = is_universe_scan or (scanner_type == "Penny Stocks (ต่ำกว่า $5)")
             spinner_msg = ("สมองกลกำลังกวาดหุ้นสุ่มจากทั้งตลาด NASDAQ (อาจใช้เวลานานกว่าปกติ)..." if is_universe_scan
                            else "สมองกลกำลังกวาดดัชนีชี้วัดเทคนิคอลและจับแท็กกลยุทธ์หุ้นทั้งหมด (อาจใช้เวลาสักครู่)...")
+            # 💀 Skeleton loading: โชว์การ์ดเปล่าวิบวับ (shimmer) ระหว่างรอ แทนหน้าว่างเปล่า ดูโปรขึ้น
+            skeleton_slot = st.empty()
+            skeleton_cards = '<div class="stock-card-grid">' + "".join(
+                '<div class="skeleton-card"><div class="skeleton-visual"></div>'
+                '<div class="skeleton-body"><div class="skeleton-line w60"></div>'
+                '<div class="skeleton-line w80"></div><div class="skeleton-line w40"></div></div></div>'
+                for _ in range(8)
+            ) + '</div>'
+            skeleton_slot.markdown(skeleton_cards, unsafe_allow_html=True)
             with st.spinner(spinner_msg):
                 t_list = load_market_tickers(scanner_type)
                 results = scan_market_batch(t_list, is_penny=is_penny_mode, market_type=market_type)
@@ -1261,6 +1700,7 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
 
                 st.session_state[scan_results_key] = results
                 st.session_state[scan_has_run_key] = True
+                skeleton_slot.empty()  # ล้าง skeleton ทิ้งก่อนแสดงผลจริง
                 st.toast(f"อัปเดตระบบตรวจสอบสัญญาณสแกนเนอร์สำเร็จ! พบสัญญาณ {len(results)} ตัว", icon="🔥")
                 st.rerun()
                 
@@ -1319,6 +1759,7 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
                     "rating_score": r.get("rating_score", 0.0),
                     "quality": r.get("quality_flag", ""),
                     "quality_reason": r.get("quality_reason", ""),
+                    "sparkline": r.get("sparkline", []),
                 })
 
             if not table_rows:
@@ -1327,18 +1768,57 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
                 # เรียงจากเรตติ้งดีสุด (คะแนนสูงสุด) ไปแย่สุด เป็นค่าเริ่มต้น
                 table_rows.sort(key=lambda x: x["rating_score"], reverse=True)
                 quality_label_map = {"ปกติ": "✅ ปกติ", "ระมัดระวังสูง": "⚠️ ระมัดระวังสูง", "ไม่แน่ใจ": "❔ ไม่แน่ใจ"}
-                display_df = pd.DataFrame([{
-                    "หุ้น": row["ticker"],
-                    "เรตติ้ง": f"{row['rating_icon']} {row['rating_label']}",
-                    "คะแนน": row["rating_score"],
-                    "ราคา ($)": row["price"],
-                    "% เปลี่ยน": row["change_str"],
-                    "แท็ก/สัญญาณ": row["tags"],
-                    "AI คุณภาพ": quality_label_map.get(row["quality"], "-") if row["quality"] else "-",
-                } for row in table_rows])
 
-                table_height = min(38 * (len(display_df) + 1) + 3, 420)
-                st.dataframe(display_df, use_container_width=True, hide_index=True, height=table_height)
+                # 🎴 Photo-led card grid: การ์ดไล่สีแทนรูปภาพ (เขียว=ซื้อ, แดง=ขาย, เทา=เป็นกลาง)
+                # ตามสไตล์ eyebrow tag ตัวพิมพ์เล็ก + หัวข้อตัวหนา + คำอธิบายบาง
+                # ⚠️ สำคัญ: HTML แต่ละบรรทัดต้องชิดซ้าย (ไม่มี indent นำหน้า) เพราะ markdown ของ Streamlit
+                # จะตีความบรรทัดที่เว้นวรรค 4 ช่องขึ้นไปเป็น "code block" แล้วแสดง tag ดิบออกมาแทนที่จะ render
+                # ป้ายเรตติ้งบนการ์ด: ตัวย่อ + คลาสสีตามระดับ
+                rating_badge_map = {
+                    "STRONG_BUY": ("STRONG BUY", "badge-strong-buy"),
+                    "BUY": ("BUY", "badge-buy"),
+                    "NEUTRAL": ("NEUTRAL", "badge-neutral"),
+                    "SELL": ("SELL", "badge-sell"),
+                    "STRONG_SELL": ("STRONG SELL", "badge-strong-sell"),
+                }
+                cards_html = ['<div class="stock-card-grid">']
+                for idx, row in enumerate(table_rows[:60]):  # จำกัด 60 การ์ดแรกกันหน้าหนักเกินไป (เรียงดีสุดไว้บนแล้ว)
+                    code = str(row.get("rating_label", ""))
+                    if "ซื้อ" in code:
+                        direction = "dir-buy"
+                    elif "ขาย" in code:
+                        direction = "dir-sell"
+                    else:
+                        direction = "dir-neutral"
+                    quality_txt = quality_label_map.get(row["quality"], "") if row["quality"] else ""
+                    eyebrow_right = quality_txt if quality_txt else "สแกนอัตโนมัติ"
+                    spark_svg = _build_sparkline_svg(row.get("sparkline", []), direction)
+                    _tk = row["ticker"]
+                    badge_text, badge_cls = rating_badge_map.get(row.get("rating_code", ""), ("", "badge-neutral"))
+                    # stagger fade-in เฉพาะ 12 ใบแรก (ที่เหลือโผล่พร้อมกัน กันรอนานตอนมีหลายใบ)
+                    delay = f"{min(idx, 12) * 0.045:.3f}s"
+                    card = (
+                        f'<a class="stock-card-link" href="?view={_tk}" target="_self" style="animation-delay:{delay};">'
+                        '<div class="stock-card">'
+                        f'<div class="stock-card-visual {direction}">'
+                        f'{spark_svg}'
+                        f'<div class="stock-card-badge {badge_cls}">{badge_text}</div>'
+                        f'<div class="stock-card-score-chip">{row["rating_icon"]} {row["rating_score"]:+.2f}</div>'
+                        '</div>'
+                        '<div class="stock-card-body">'
+                        f'<div class="stock-card-eyebrow">{row["change_str"]} &nbsp;·&nbsp; {eyebrow_right}</div>'
+                        f'<div class="stock-card-title">{_tk}</div>'
+                        f'<div class="stock-card-desc">${row["price"]:,.2f} &nbsp;·&nbsp; {row["rating_label"]}<br>{row["tags"]}</div>'
+                        '</div>'
+                        '<div class="stock-card-cta">📈 กดเพื่อดูกราฟ</div>'
+                        '</div>'
+                        '</a>'
+                    )
+                    cards_html.append(card)
+                cards_html.append('</div>')
+                st.markdown("".join(cards_html), unsafe_allow_html=True)
+                if len(table_rows) > 60:
+                    st.caption(f"แสดง 60 จาก {len(table_rows)} ตัวที่ตรงเงื่อนไข (เรียงเรตติ้งดีสุดไว้บนแล้ว)")
 
                 # แยกเหตุผลของ AI เฉพาะตัวที่เตือน "ระมัดระวังสูง" ไว้ในกล่องพับเก็บ ไม่ให้ตารางหลักรกเกินไป
                 warn_rows = [row for row in table_rows if row["quality"] == "ระมัดระวังสูง" and row["quality_reason"]]
@@ -1347,24 +1827,31 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
                         for row in warn_rows:
                             st.markdown(f"- **{row['ticker']}**: {row['quality_reason']}")
 
-                sel_col1, sel_col2 = st.columns([2, 1])
-                with sel_col1:
-                    ticker_choices = [row["ticker"] for row in table_rows]
-                    selected_for_analysis = st.selectbox("เลือกหุ้นที่จะวิเคราะห์ต่อ:", ticker_choices,
-                                                          key=f"select_analyze_{portfolio_key}_{selected_tag}")
-                with sel_col2:
+                # ⭐ เพิ่มหุ้นจากผลสแกนเข้า Watchlist (เลือกได้หลายตัวรวดเดียว)
+                st.markdown(f"###### {lucide('star', size=15, color='#c9a86a')}เพิ่มหุ้นที่สแกนเจอเข้า Watchlist", unsafe_allow_html=True)
+                wl_add_col1, wl_add_col2 = st.columns([3, 1])
+                with wl_add_col1:
+                    scan_tickers = [row["ticker"] for row in table_rows]
+                    picked_for_wl = st.multiselect(
+                        "เลือกหุ้นที่อยากจับตา (เพิ่มได้หลายตัว):", scan_tickers,
+                        key=f"wl_pick_{portfolio_key}_{selected_tag}"
+                    )
+                with wl_add_col2:
                     st.write("")
-                    if st.button("🔍 วิเคราะห์ →", key=f"btn_table_sel_{portfolio_key}",
+                    if st.button("⭐ เพิ่มเข้า Watchlist", key=f"wl_add_scan_{portfolio_key}",
                                  use_container_width=True, type="primary"):
-                        st.session_state.active_ticker = selected_for_analysis
-                        st.session_state.ai_debate_result = None
-                        st.session_state.chat_history = []
-                        st.rerun()
+                        if picked_for_wl:
+                            for tk in picked_for_wl:
+                                add_to_watchlist(tk, market_type)
+                            st.toast(f"เพิ่ม {len(picked_for_wl)} ตัวเข้า Watchlist แล้ว", icon="⭐")
+                            st.rerun()
+                        else:
+                            st.toast("ยังไม่ได้เลือกหุ้น", icon="⚠️")
         else:
             st.info("💡 ไม่พบสัญญาณตลาด แนะนำกวาดสแกนด้วยตนเอง")
                 
     with col_a:
-        st.markdown("##### 🧠 AI Debate Expert")
+        st.markdown(f"##### {lucide('brain', size=18, color='#a855f7')}AI Debate Expert", unsafe_allow_html=True)
         st.markdown("""
             <div class="vs-banner" style="margin-bottom:10px;">
                 <div class="vs-side vs-gemini" style="padding: 6px 12px;">
@@ -1381,12 +1868,8 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
         _news_flags_preview = news.get_latest_flags(ticker)
         if _news_flags_preview:
             _sent_icon = {"positive": "🟢", "negative": "🔴", "neutral": "⚪"}
-            # 🔒 headline/reasoning มาจากข่าวภายนอก (ไม่ใช่ข้อมูลที่เราควบคุมได้) ต้อง escape ก่อนแทรกเข้า HTML เสมอ
-            # ไม่งั้นถ้าหัวข่าวมี " หรือ < หลุดมา จะทำให้ title attribute แตก หรือฉีด HTML ได้
             _badge_html = " ".join(
-                f'<span class="pill" title="{html_lib.escape(f["reasoning"])}">'
-                f'{_sent_icon.get(f["sentiment"], "⚪")} '
-                f'{html_lib.escape(f["headline"][:40])}{"…" if len(f["headline"]) > 40 else ""}</span>'
+                f'<span class="pill" title="{f["reasoning"]}">{_sent_icon.get(f["sentiment"], "⚪")} {f["headline"][:40]}{"…" if len(f["headline"]) > 40 else ""}</span>'
                 for f in _news_flags_preview[:3]
             )
             st.markdown(f'<div style="margin-bottom:8px;">{_badge_html}</div>', unsafe_allow_html=True)
@@ -1410,19 +1893,7 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
                         }
                         st.session_state.ai_debate_result = run_ai_debate(ticker, ind_data)
                         st.session_state.chat_history = []
-
-                        # 🔧 กันบันทึกซ้ำใน Trade Journal: gemini_first_opinion/claude_challenge_and_verdict
-                        # มี @st.cache_data(ttl=3600) ครอบอยู่ ถ้ากดปุ่มซ้ำใส่ ticker เดิมภายใน 1 ชม. จะได้ verdict
-                        # เดิมกลับมาจาก cache (ไม่ยิง API ซ้ำ ถูกต้องแล้ว) แต่ journal.log_verdict อยู่นอก cache
-                        # เดิมจะถูกเรียกทุกครั้งที่กดปุ่ม ทำให้บันทึกซ้ำซ้อนรายการเดียวกันหลายครั้งและดันตัวเลข
-                        # Win Rate เพี้ยน จึงเช็ค signature ของ verdict ก่อนบันทึก ถ้าเหมือนรอบล่าสุดที่บันทึกไปแล้ว
-                        # (ticker + เนื้อหา verdict เดียวกันเป๊ะ) ให้ข้ามการบันทึกซ้ำ
-                        verdict_dict = st.session_state.ai_debate_result["claude"]
-                        log_sig_key = f"last_logged_verdict_sig_{portfolio_key}"
-                        log_signature = (ticker, json.dumps(verdict_dict, sort_keys=True))
-                        if st.session_state.get(log_sig_key) != log_signature:
-                            journal.log_verdict(ticker, verdict_dict)  # 📓 บันทึกลง Trade Journal
-                            st.session_state[log_sig_key] = log_signature
+                        journal.log_verdict(ticker, st.session_state.ai_debate_result["claude"])  # 📓 บันทึกลง Trade Journal
                     except Exception as e:
                         st.error(str(e))
                         
@@ -1436,26 +1907,31 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
             banner_class = "buy" if signal_upper == "BUY" else "sell" if signal_upper == "SELL" else "hold"
             icon = "🟢" if banner_class == "buy" else "🔴" if banner_class == "sell" else "🟡"
             action_label = {"buy": "ซื้อ (BUY)", "sell": "ขาย (SELL)", "hold": "ถือครอง (HOLD)"}[banner_class]
+            direction_class = {"buy": "dir-buy", "sell": "dir-sell", "hold": "dir-neutral"}[banner_class]
 
-            # 🔒 escape ข้อความ free-form ทั้งหมดที่มาจาก Gemini/Claude ก่อนแทรกเข้า HTML
-            # (ปกติ AI ไม่น่าจะใส่ HTML มาเอง แต่ถ้าเนื้อหาข่าว/prompt โดนแทรกอะไรแปลกๆ เข้ามา จะได้ไม่หลุดมา render เป็น HTML จริง)
-            e_action_summary = html_lib.escape(c.get('action_summary', ''))
-            e_market_sentiment = html_lib.escape(g.get('market_sentiment', '-'))
-            e_challenge_notes = html_lib.escape(c.get('challenge_notes', '-'))
-            e_support_zone = html_lib.escape(str(c.get('support_zone', '-')))
-            e_resistance_zone = html_lib.escape(str(c.get('resistance_zone', '-')))
-            e_entry_price = html_lib.escape(str(c.get('entry_price', '-')))
-            e_stop_loss = html_lib.escape(str(c.get('stop_loss', '-')))
-            e_take_profit = html_lib.escape(str(c.get('take_profit', '-')))
-            e_final_reasoning = html_lib.escape(c.get('final_reasoning', '-'))
-            e_position_sizing_note = html_lib.escape(c.get('position_sizing_note', '-'))
-
-            st.markdown(f"""
-            <div style="background: linear-gradient(90deg, rgba(201,168,106,0.15), rgba(201,168,106,0.02)); border: 1.5px solid var(--verdict); border-radius: 8px; padding: 10px; margin-bottom:12px;">
-                <div style="font-weight:bold; color:var(--verdict); font-size:0.9rem;">{icon} คำแนะนำสุดท้าย: {action_label}</div>
-                <div style="font-size:0.8rem; color:#cbd5e1; margin-top:4px;">{e_action_summary}</div>
-            </div>
-            """, unsafe_allow_html=True)
+            # 🎴 การ์ด Verdict สไตล์ photo-led เดียวกับผลสแกน (ใช้ gradient ไล่สีแทนรูปภาพ)
+            # ⚠️ HTML ต้องชิดซ้าย (ไม่มี indent นำหน้า) กัน markdown ตีความเป็น code block แล้วโชว์ tag ดิบ
+            verdict_html = (
+                '<div class="verdict-card-wrap">'
+                f'<div class="stock-card-visual {direction_class}" style="height:70px;">'
+                f'<div class="stock-card-score-chip">{icon} {action_label}</div>'
+                '</div>'
+                '<div class="stock-card-body" style="padding:16px 18px 18px;">'
+                f'<div class="stock-card-eyebrow">{ticker} &nbsp;·&nbsp; AI DEBATE VERDICT</div>'
+                f'<div class="stock-card-title" style="font-size:1.4rem;">{action_label}</div>'
+                f'<div class="stock-card-desc" style="font-size:0.8rem; color:#cbd5e1;">{c.get("action_summary", "")}</div>'
+                f'<div style="font-size:0.75rem; color:var(--verdict); font-weight:bold; margin-top:12px;">🛡 {c.get("support_zone", "-")} &nbsp;&nbsp;|&nbsp;&nbsp; 🚀 {c.get("resistance_zone", "-")}</div>'
+                '<div class="plan-grid" style="margin-top:6px; gap:8px;">'
+                f'<div class="plan-cell entry" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">จุดเข้าซื้อ</div><div class="plan-value" style="font-size:0.8rem;">{c.get("entry_price", "-")}</div></div>'
+                f'<div class="plan-cell stop" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">Stop Loss</div><div class="plan-value" style="font-size:0.8rem;">{c.get("stop_loss", "-")}</div></div>'
+                f'<div class="plan-cell target" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">Take Profit</div><div class="plan-value" style="font-size:0.8rem;">{c.get("take_profit", "-")}</div></div>'
+                '</div>'
+                f'<div style="font-size:0.75rem; color:#94a3b8; margin-top:10px; line-height:1.3;"><strong>เหตุผลสรุป:</strong> {c.get("final_reasoning", "-")}</div>'
+                f'<div style="font-size:0.7rem; color:#7b8494; margin-top:4px;">💼 {c.get("position_sizing_note", "-")}</div>'
+                '</div>'
+                '</div>'
+            )
+            st.markdown(verdict_html, unsafe_allow_html=True)
             
             # สรุปดีเบตจำลองความเห็นย่อย
             with st.expander("🔍 ดูบทวิพากษ์และข้อท้าทาย (Gemini vs Claude)"):
@@ -1464,27 +1940,12 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
                 
                 st.markdown(f"""
                 <div style="font-size:0.8rem;">
-                    <p><strong style="color:var(--gemini);">Gemini Opinion:</strong> {e_market_sentiment}</p>
-                    <p><strong style="color:var(--claude);">Claude Challenge:</strong> {e_challenge_notes}</p>
+                    <p><strong style="color:var(--gemini);">Gemini Opinion:</strong> {g.get('market_sentiment', '-')}</p>
+                    <p><strong style="color:var(--claude);">Claude Challenge:</strong> {c.get('challenge_notes', '-')}</p>
                     <span class="pill {agree_class}">{agree_text}</span>
-                    <span class="pill">ความเสี่ยง: {html_lib.escape(str(c.get('risk_level', '-')))}</span>
+                    <span class="pill">ความเสี่ยง: {c.get('risk_level', '-')}</span>
                 </div>
                 """, unsafe_allow_html=True)
-            
-            # พิกัด Verdict Action Plan
-            signal_class = {"BUY": "signal-buy", "SELL": "signal-sell", "HOLD": "signal-hold"}.get(signal_upper, "signal-hold")
-            st.markdown(f"""
-            <div class="verdict-box" style="padding:12px; margin-top:8px;">
-                <div style="font-size:0.75rem; color:var(--verdict); font-weight:bold;">🛡 {e_support_zone} &nbsp;&nbsp;|&nbsp;&nbsp; 🚀 {e_resistance_zone}</div>
-                <div class="plan-grid" style="margin-top:6px; gap:8px;">
-                    <div class="plan-cell entry" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">จุดเข้าซื้อ</div><div class="plan-value" style="font-size:0.8rem;">{e_entry_price}</div></div>
-                    <div class="plan-cell stop" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">Stop Loss</div><div class="plan-value" style="font-size:0.8rem;">{e_stop_loss}</div></div>
-                    <div class="plan-cell target" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">Take Profit</div><div class="plan-value" style="font-size:0.8rem;">{e_take_profit}</div></div>
-                </div>
-                <div style="font-size:0.75rem; color:#94a3b8; margin-top:8px; line-height:1.3;"><strong>เหตุผลสรุป:</strong> {e_final_reasoning}</div>
-                <div style="font-size:0.7rem; color:#7b8494; margin-top:4px;">💼 {e_position_sizing_note}</div>
-            </div>
-            """, unsafe_allow_html=True)
             
             # ส่วนแชทสืบถามเพิ่มเติมกับ AI Copilot
             st.divider()
@@ -1492,10 +1953,7 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
             for chat in st.session_state.chat_history:
                 style_class = "chat-bubble-user" if chat["role"] == "user" else "chat-bubble-ai"
                 sender = "คุณ" if chat["role"] == "user" else "AI Copilot"
-                # 🔒 escape ทั้งข้อความ user พิมพ์เอง และคำตอบจาก AI ก่อนแทรกเข้า unsafe_allow_html เสมอ
-                # (เดิมใส่ chat['content'] ดิบๆ ตรงๆ — ถ้า user พิมพ์ <script>...</script> จะรันเป็น HTML/JS ทันที)
-                safe_content = html_lib.escape(chat['content']).replace("\n", "<br>")
-                st.markdown(f"""<div class="{style_class}"><strong>{sender}:</strong><br>{safe_content}</div>""", unsafe_allow_html=True)
+                st.markdown(f"""<div class="{style_class}"><strong>{sender}:</strong><br>{chat['content']}</div>""", unsafe_allow_html=True)
             
             with st.form(key=f"chat_form_{portfolio_key}", clear_on_submit=True):
                 user_query = st.text_input("ปรึกษาโมเมนตัมเพิ่มเติม:", key=f"input_query_{portfolio_key}")
@@ -1575,6 +2033,9 @@ def render_trade_journal_tab():
 
 
 # ดำเนินการกระจายหน้าตามแท็บคลาสต่างๆ
+with tab_watchlist:
+    render_watchlist_tab()
+
 with tab_us_class:
     render_portfolio_and_scanner_area(
         "port_us", ["NASDAQ 100", "S&P 500", "Penny Stocks (ต่ำกว่า $5)", "Penny Stocks (สแกนทั้งตลาด NASDAQ + AI กรองคุณภาพ)"],
