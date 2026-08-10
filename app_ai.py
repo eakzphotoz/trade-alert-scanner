@@ -12,6 +12,7 @@ import random
 import sqlite3
 import os
 import time
+import html as html_lib  # 🔒 escape เนื้อหาก่อนแทรกเข้า unsafe_allow_html กัน XSS
 from datetime import datetime
 from pydantic import BaseModel
 
@@ -259,15 +260,25 @@ class PennyStockQualityItem(BaseModel):
 class PennyStockQualityBatch(BaseModel):
     assessments: list[PennyStockQualityItem]
 
+# 🔒 whitelist charset เดียวที่ใช้ sanitize ticker ทุกจุดที่รับ input จากผู้ใช้/URL (กัน XSS ต้นตอเดียวจบ)
+# ใช้ตัวเดียวกันทั้งช่องค้นหาหลัก, watchlist quick-add, และค่าจาก query param ?view=
+def sanitize_ticker(raw: str) -> str:
+    return re.sub(r'[^A-Z0-9.:\-]', '', str(raw or "").upper())
+
+
 # --- 🔄 ระบบจำข้อมูลและสถานะเว็บ ---
 if 'active_ticker' not in st.session_state:
     st.session_state.active_ticker = "AAPL"
 
 # 🖱️ รองรับการคลิกการ์ดหุ้น: การ์ดแต่ละใบเป็นลิงก์ ?view=TICKER พอคลิกจะมาตั้ง active_ticker
 # ให้กราฟใหญ่ด้านบนอัปเดตทันที แล้วล้าง query param ทิ้งเพื่อไม่ให้ค้างเวลารีเฟรช
+# 🔒 แก้ช่องโหว่ Reflected XSS: เดิมเอาค่าจาก query param มา .strip().upper() ตรงๆ โดยไม่กรองอักขระเลย
+# ถ้ามีคนส่งลิงก์ ?view=<script>...</script> ให้เปิด แล้วค่านั้นจะไปโผล่ใน unsafe_allow_html หลายจุด
+# (หัวกราฟ, การ์ด verdict) ทำให้รันสคริปต์แปลกปลอมได้ทันทีตอนเปิดลิงก์ ต้อง sanitize ด้วย whitelist เดียวกับ
+# ช่องค้นหาหลักเสมอ ไม่ว่าค่าจะมาจากไหนก็ตาม
 _view_ticker = st.query_params.get("view")
 if _view_ticker:
-    st.session_state.active_ticker = str(_view_ticker).strip().upper()
+    st.session_state.active_ticker = sanitize_ticker(_view_ticker)
     st.session_state.ai_debate_result = None
     st.session_state.chat_history = []
     st.query_params.clear()
@@ -637,9 +648,10 @@ ticker_tape_html = f"""
 components.html(ticker_tape_html, height=50)
 
 # --- 🛠️ Helper Functions ---
-def fetch_data_with_header(url):
+def fetch_data_with_header(url, timeout=10):
+    """เพิ่ม timeout ป้องกัน request ค้างไม่มีกำหนดเวลาเน็ตมีปัญหาหรือปลายทางไม่ตอบ (ทำแอปแขวนทั้งหน้า)"""
     req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-    with urllib.request.urlopen(req) as response: 
+    with urllib.request.urlopen(req, timeout=timeout) as response:
         return response.read()
 
 @st.cache_data(ttl=86400)  # cache 1 วัน รายชื่อหุ้นที่จดทะเบียนไม่เปลี่ยนบ่อย
@@ -775,24 +787,78 @@ def get_market_regime(index_ticker):
     return _get_market_regime_raw(index_ticker)
 
 
+def _download_chunk_with_retry(tickers_str, request_timeout=12):
+    """
+    ดึงราคาหุ้นจาก yfinance พร้อม retry แบบ exponential backoff (สั้นกว่า AI call เพราะไม่มีค่าใช้จ่ายต่อครั้ง
+    แค่ต้องการทนต่อ rate-limit/เน็ตสะดุดชั่วคราวของ Yahoo Finance เท่านั้น)
+
+    🔧 ใส่ timeout ต่อ request ชัดเจน ถ้า Yahoo ไม่ตอบเลย (เช่นโดน rate-limit แบบเงียบจาก IP ของ Streamlit Cloud)
+    จะได้ fail ไว แล้วเข้า retry รอบถัดไป แทนที่จะแขวนรอนานจนดูเหมือนแอปค้าง
+    """
+    delays = [1, 2, 4]
+    for delay in delays:
+        try:
+            return yf.download(tickers_str, period="3mo", interval="1d", group_by="ticker",
+                                auto_adjust=False, progress=False, threads=True, timeout=request_timeout)
+        except Exception as e:
+            print(f"yf.download retry after error: {e}")
+            time.sleep(delay)
+    # พยายามครั้งสุดท้าย ถ้ายังพังให้ปล่อย exception ออกไปให้ผู้เรียก (scan_market_batch) จัดการเป็นราย chunk
+    return yf.download(tickers_str, period="3mo", interval="1d", group_by="ticker",
+                        auto_adjust=False, progress=False, threads=True, timeout=request_timeout)
+
+
+SCAN_TIME_BUDGET_SECONDS = 45  # เพดานเวลารวมทั้งรอบสแกน กันแอปค้างไม่มีกำหนดเวลาถ้า Yahoo ตอบช้า/โดน rate-limit หนักทุก chunk
+
+
 def scan_market_batch(tickers_list, is_penny=False, market_type="US"):
     """
     กวาดสแกนหุ้นทั้งหมดในลิสต์โดยคำนวณสัญญาณมาตรฐานและแท็กกลยุทธ์ Reversal / Take Profit ทั้งระยะสั้นและระยะกลาง
     market_type: "US" / "TH" / "Crypto" — ใช้เลือกดัชนีอ้างอิงเช็คภาวะตลาดรวม (Market Regime)
+
+    🔧 แก้บั๊ก "สแกนไม่ติดบ้าง/error บ้าง/ค้างเงียบๆ": เดิมยิง yf.download() ก้อนเดียวรวดสำหรับ ticker ทั้งหมด
+    (มากสุด ~250 ตัวตอน universe scan) ถ้า Yahoo rate-limit หรือเน็ตสะดุดแค่ครั้งเดียวระหว่างโหลด การสแกนทั้งรอบ
+    จะพังหมดทันทีหรือแขวนรอไม่มีกำหนด เปลี่ยนมาแบ่งเป็น chunk ละ 50 ตัว + retry ต่อ chunk + progress bar ให้เห็น
+    ว่ากำลังทำอยู่จริง + เพดานเวลารวม SCAN_TIME_BUDGET_SECONDS ตัดจบถ้านานเกินไป คืนผลลัพธ์เท่าที่มีแทนการรอไม่รู้จบ
     """
     results = []
     scan_pool = tickers_list
-    tickers_str = " ".join(scan_pool)
+    CHUNK_SIZE = 50
+    chunks = [scan_pool[i:i + CHUNK_SIZE] for i in range(0, len(scan_pool), CHUNK_SIZE)]
+    failed_chunks = 0
+    timed_out = False
 
     # 🌍 เช็คภาวะตลาดรวมครั้งเดียวก่อนสแกน (ไม่ต้องเช็คซ้ำทุกตัว ประหยัด request และเร็วขึ้นมาก)
     regime_ticker = MARKET_REGIME_INDEX.get(market_type)
     regime_info = get_market_regime(regime_ticker) if regime_ticker else {"regime": None}
     regime = regime_info.get("regime")
 
-    try:
-        # โหลดข้อมูลย้อนหลัง 3 เดือน เพื่อความแม่นยำและเสถียรภาพตัวชี้วัด (RSI14, RSI7, EMA20, EMA50)
-        raw_df = yf.download(tickers_str, period="3mo", interval="1d", group_by="ticker", auto_adjust=False, progress=False, threads=True)
-        for ticker in scan_pool:
+    progress_bar = st.progress(0.0)
+    progress_text = st.empty()
+    scan_started_at = time.time()
+
+    for chunk_idx, chunk in enumerate(chunks):
+        elapsed = time.time() - scan_started_at
+        if elapsed > SCAN_TIME_BUDGET_SECONDS:
+            timed_out = True
+            print(f"Scan time budget exceeded ({elapsed:.1f}s), stopping early with {len(chunks) - chunk_idx} chunk(s) left")
+            break
+
+        progress_text.caption(
+            f"📡 กำลังดึงข้อมูล chunk {chunk_idx + 1}/{len(chunks)} ({len(chunk)} หุ้น) — เจอสัญญาณแล้ว {len(results)} ตัว..."
+        )
+        progress_bar.progress(chunk_idx / max(len(chunks), 1))
+
+        tickers_str = " ".join(chunk)
+        try:
+            # โหลดข้อมูลย้อนหลัง 3 เดือน เพื่อความแม่นยำและเสถียรภาพตัวชี้วัด (RSI14, RSI7, EMA20, EMA50)
+            raw_df = _download_chunk_with_retry(tickers_str)
+        except Exception as e:
+            print(f"Chunk download failed ({len(chunk)} tickers): {e}")
+            failed_chunks += 1
+            continue
+
+        for ticker in chunk:
             try:
                 if isinstance(raw_df.columns, pd.MultiIndex):
                     if ticker in raw_df.columns.get_level_values(0):
@@ -958,11 +1024,25 @@ def scan_market_batch(tickers_list, is_penny=False, market_type="US"):
             except Exception as e:
                 print(f"Error scanning {ticker}: {e}")
                 continue
-                
-        # เรียงตามความเด่นของสัญญาณ
-        results.sort(key=lambda x: x["signal_count"], reverse=True)
-    except Exception as e:
-        st.sidebar.error(f"เกิดข้อผิดพลาดในการสแกนตลาด: {e}")
+
+    # เคลียร์ progress bar/ข้อความทิ้งหลังสแกนเสร็จ (ไม่ให้ค้างโชว์ 100% อยู่บนหน้าจอ)
+    progress_bar.empty()
+    progress_text.empty()
+
+    # เรียงตามความเด่นของสัญญาณ (เรียงหลังรวมผลจากทุก chunk แล้ว)
+    results.sort(key=lambda x: x["signal_count"], reverse=True)
+
+    if timed_out:
+        st.sidebar.warning(
+            f"⏱️ สแกนใช้เวลานานเกิน {SCAN_TIME_BUDGET_SECONDS} วิ ตัดจบก่อนกำหนดเพื่อไม่ให้ค้างไม่รู้จบ "
+            f"— แสดงผลลัพธ์เท่าที่สแกนได้ ({len(results)} ตัว) ลองสแกนซ้ำอีกครั้งถ้าอยากได้ผลครบทุกตัว "
+            "(อาจเป็นเพราะ Yahoo Finance ตอบช้าผิดปกติ หรือ IP ของ Streamlit Cloud โดน rate-limit ชั่วคราว)"
+        )
+    elif failed_chunks:
+        st.sidebar.warning(
+            f"⚠️ ดึงข้อมูลบางส่วนไม่สำเร็จ ({failed_chunks}/{len(chunks)} ชุด ~{failed_chunks * CHUNK_SIZE} หุ้น) "
+            "ผลสแกนรอบนี้อาจไม่ครบทุกตัว ลองสแกนซ้ำอีกครั้งถ้าอยากได้ผลครบ"
+        )
     return results
 
 # ==========================================
@@ -1013,7 +1093,7 @@ def ai_quality_filter_stocks(tickers_tuple):
     """
     def run_quality_check():
         response = client.models.generate_content(
-            model='gemini-3.1-flash-lite',
+            model='gemini-3.5-flash-lite',
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -1056,7 +1136,7 @@ def gemini_first_opinion(ticker, price_rounded, rsi_rounded, ma20_rounded, bb_u_
     """
     def run_gemini():
         response = client.models.generate_content(
-            model='gemini-3.1-flash-lite',
+            model='gemini-3.5-flash-lite',
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -1171,7 +1251,7 @@ def ask_ai_copilot(query, ticker, price, tech_context, initial_analysis_str, cha
     """
     def run_copilot():
         response = client.models.generate_content(
-            model='gemini-3.1-flash-lite',
+            model='gemini-3.5-flash-lite',
             contents=prompt,
             config=types.GenerateContentConfig(temperature=0.5)
         )
@@ -1188,7 +1268,7 @@ with st.sidebar:
     
     st.write("🔍 **ค้นหาและปลดล็อกสินทรัพย์**")
     search_ticker = st.text_input("ระบุสัญลักษณ์ (เช่น AAPL, PTT.BK, BTC-USD):", value=st.session_state.active_ticker).upper()
-    safe_search_ticker = re.sub(r'[^A-Z0-9.:\-]', '', search_ticker)
+    safe_search_ticker = sanitize_ticker(search_ticker)
     
     if st.button("⚡ โหลดราคากราฟหลัก", use_container_width=True):
         st.session_state.active_ticker = safe_search_ticker
@@ -1559,7 +1639,10 @@ def render_watchlist_tab():
     # เพิ่ม/ลบด่วนจากช่องพิมพ์ (เผื่ออยากเพิ่มหลายตัวรวดเดียวไม่ต้องเปิดกราฟทีละตัว)
     add_col1, add_col2 = st.columns([3, 1])
     with add_col1:
-        new_tk = st.text_input("เพิ่มหุ้นเข้า Watchlist เร็วๆ (เช่น AAPL, PTT.BK, BTC-USD):", key="wl_quick_add").strip().upper()
+        new_tk_raw = st.text_input("เพิ่มหุ้นเข้า Watchlist เร็วๆ (เช่น AAPL, PTT.BK, BTC-USD):", key="wl_quick_add")
+        # 🔒 sanitize ก่อนเก็บลง DB เสมอ (เดิมไม่กรองอักขระเลย ต่างจากช่องค้นหาหลัก ทำให้ฝัง HTML/JS ผ่านชื่อ
+        # ticker ปลอมแล้วเก็บลง watchlist ได้ พอ render เป็นการ์ดทีหลังจะกลายเป็น stored XSS)
+        new_tk = sanitize_ticker(new_tk_raw)
     with add_col2:
         st.write("")
         if st.button("➕ เพิ่ม", key="wl_quick_add_btn", use_container_width=True, type="primary"):
@@ -1591,7 +1674,7 @@ def render_watchlist_tab():
         code = str(r.get("rating_label", ""))
         direction = "dir-buy" if "ซื้อ" in code else "dir-sell" if "ขาย" in code else "dir-neutral"
         spark_svg = _build_sparkline_svg(r.get("sparkline", []), direction)
-        _tk = r["ticker"]
+        _tk = html_lib.escape(str(r["ticker"]))  # 🔒 escape กันเผื่อมี ticker เก่าที่หลุดเข้า DB ก่อนแก้ตัวกรอง input
         badge_text, badge_cls = rating_badge_map.get(r.get("rating_code", ""), ("", "badge-neutral"))
         change = r.get("change_pct", 0.0)
         change_str = f"🟢 +{change:.2f}%" if change >= 0 else f"🔴 {change:.2f}%"
@@ -1793,7 +1876,7 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
                     quality_txt = quality_label_map.get(row["quality"], "") if row["quality"] else ""
                     eyebrow_right = quality_txt if quality_txt else "สแกนอัตโนมัติ"
                     spark_svg = _build_sparkline_svg(row.get("sparkline", []), direction)
-                    _tk = row["ticker"]
+                    _tk = html_lib.escape(str(row["ticker"]))  # 🔒 escape กันไว้อีกชั้น (defense in depth)
                     badge_text, badge_cls = rating_badge_map.get(row.get("rating_code", ""), ("", "badge-neutral"))
                     # stagger fade-in เฉพาะ 12 ใบแรก (ที่เหลือโผล่พร้อมกัน กันรอนานตอนมีหลายใบ)
                     delay = f"{min(idx, 12) * 0.045:.3f}s"
@@ -1868,8 +1951,12 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
         _news_flags_preview = news.get_latest_flags(ticker)
         if _news_flags_preview:
             _sent_icon = {"positive": "🟢", "negative": "🔴", "neutral": "⚪"}
+            # 🔒 headline/reasoning มาจากข่าวภายนอก ต้อง escape ก่อนแทรกเข้า HTML เสมอ ไม่งั้นถ้าหัวข่าวมี " หรือ <
+            # หลุดมา จะทำให้ title attribute แตก หรือฉีด HTML ได้
             _badge_html = " ".join(
-                f'<span class="pill" title="{f["reasoning"]}">{_sent_icon.get(f["sentiment"], "⚪")} {f["headline"][:40]}{"…" if len(f["headline"]) > 40 else ""}</span>'
+                f'<span class="pill" title="{html_lib.escape(f["reasoning"])}">'
+                f'{_sent_icon.get(f["sentiment"], "⚪")} '
+                f'{html_lib.escape(f["headline"][:40])}{"…" if len(f["headline"]) > 40 else ""}</span>'
                 for f in _news_flags_preview[:3]
             )
             st.markdown(f'<div style="margin-bottom:8px;">{_badge_html}</div>', unsafe_allow_html=True)
@@ -1893,7 +1980,18 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
                         }
                         st.session_state.ai_debate_result = run_ai_debate(ticker, ind_data)
                         st.session_state.chat_history = []
-                        journal.log_verdict(ticker, st.session_state.ai_debate_result["claude"])  # 📓 บันทึกลง Trade Journal
+
+                        # 🔧 กันบันทึกซ้ำใน Trade Journal: gemini_first_opinion/claude_challenge_and_verdict
+                        # มี @st.cache_data(ttl=3600) ครอบอยู่ ถ้ากดปุ่มซ้ำใส่ ticker เดิมภายใน 1 ชม. จะได้ verdict
+                        # เดิมกลับมาจาก cache แต่ journal.log_verdict อยู่นอก cache เลยถูกเรียกทุกครั้งที่กดปุ่ม
+                        # ทำให้บันทึกซ้ำซ้อนรายการเดียวกันหลายครั้งและดันตัวเลข Win Rate เพี้ยน จึงเช็ค signature
+                        # ของ verdict ก่อนบันทึก ถ้าเหมือนรอบล่าสุดที่บันทึกไปแล้วให้ข้าม
+                        verdict_dict = st.session_state.ai_debate_result["claude"]
+                        log_sig_key = f"last_logged_verdict_sig_{portfolio_key}"
+                        log_signature = (ticker, json.dumps(verdict_dict, sort_keys=True))
+                        if st.session_state.get(log_sig_key) != log_signature:
+                            journal.log_verdict(ticker, verdict_dict)  # 📓 บันทึกลง Trade Journal
+                            st.session_state[log_sig_key] = log_signature
                     except Exception as e:
                         st.error(str(e))
                         
@@ -1911,23 +2009,35 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
 
             # 🎴 การ์ด Verdict สไตล์ photo-led เดียวกับผลสแกน (ใช้ gradient ไล่สีแทนรูปภาพ)
             # ⚠️ HTML ต้องชิดซ้าย (ไม่มี indent นำหน้า) กัน markdown ตีความเป็น code block แล้วโชว์ tag ดิบ
+            # 🔒 escape ข้อความ free-form ทั้งหมดจาก Gemini/Claude ก่อนแทรกเข้า HTML (กัน HTML/JS หลุดมาจาก
+            # เนื้อหาข่าว/prompt ที่ป้อนเข้าไปแล้วสะท้อนกลับออกมาในคำตอบ AI)
+            e_action_summary = html_lib.escape(c.get("action_summary", ""))
+            e_support_zone = html_lib.escape(str(c.get("support_zone", "-")))
+            e_resistance_zone = html_lib.escape(str(c.get("resistance_zone", "-")))
+            e_entry_price = html_lib.escape(str(c.get("entry_price", "-")))
+            e_stop_loss = html_lib.escape(str(c.get("stop_loss", "-")))
+            e_take_profit = html_lib.escape(str(c.get("take_profit", "-")))
+            e_final_reasoning = html_lib.escape(c.get("final_reasoning", "-"))
+            e_position_sizing_note = html_lib.escape(c.get("position_sizing_note", "-"))
+            e_ticker_disp = html_lib.escape(ticker)
+
             verdict_html = (
                 '<div class="verdict-card-wrap">'
                 f'<div class="stock-card-visual {direction_class}" style="height:70px;">'
                 f'<div class="stock-card-score-chip">{icon} {action_label}</div>'
                 '</div>'
                 '<div class="stock-card-body" style="padding:16px 18px 18px;">'
-                f'<div class="stock-card-eyebrow">{ticker} &nbsp;·&nbsp; AI DEBATE VERDICT</div>'
+                f'<div class="stock-card-eyebrow">{e_ticker_disp} &nbsp;·&nbsp; AI DEBATE VERDICT</div>'
                 f'<div class="stock-card-title" style="font-size:1.4rem;">{action_label}</div>'
-                f'<div class="stock-card-desc" style="font-size:0.8rem; color:#cbd5e1;">{c.get("action_summary", "")}</div>'
-                f'<div style="font-size:0.75rem; color:var(--verdict); font-weight:bold; margin-top:12px;">🛡 {c.get("support_zone", "-")} &nbsp;&nbsp;|&nbsp;&nbsp; 🚀 {c.get("resistance_zone", "-")}</div>'
+                f'<div class="stock-card-desc" style="font-size:0.8rem; color:#cbd5e1;">{e_action_summary}</div>'
+                f'<div style="font-size:0.75rem; color:var(--verdict); font-weight:bold; margin-top:12px;">🛡 {e_support_zone} &nbsp;&nbsp;|&nbsp;&nbsp; 🚀 {e_resistance_zone}</div>'
                 '<div class="plan-grid" style="margin-top:6px; gap:8px;">'
-                f'<div class="plan-cell entry" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">จุดเข้าซื้อ</div><div class="plan-value" style="font-size:0.8rem;">{c.get("entry_price", "-")}</div></div>'
-                f'<div class="plan-cell stop" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">Stop Loss</div><div class="plan-value" style="font-size:0.8rem;">{c.get("stop_loss", "-")}</div></div>'
-                f'<div class="plan-cell target" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">Take Profit</div><div class="plan-value" style="font-size:0.8rem;">{c.get("take_profit", "-")}</div></div>'
+                f'<div class="plan-cell entry" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">จุดเข้าซื้อ</div><div class="plan-value" style="font-size:0.8rem;">{e_entry_price}</div></div>'
+                f'<div class="plan-cell stop" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">Stop Loss</div><div class="plan-value" style="font-size:0.8rem;">{e_stop_loss}</div></div>'
+                f'<div class="plan-cell target" style="padding:6px 8px;"><div class="plan-label" style="font-size:0.55rem;">Take Profit</div><div class="plan-value" style="font-size:0.8rem;">{e_take_profit}</div></div>'
                 '</div>'
-                f'<div style="font-size:0.75rem; color:#94a3b8; margin-top:10px; line-height:1.3;"><strong>เหตุผลสรุป:</strong> {c.get("final_reasoning", "-")}</div>'
-                f'<div style="font-size:0.7rem; color:#7b8494; margin-top:4px;">💼 {c.get("position_sizing_note", "-")}</div>'
+                f'<div style="font-size:0.75rem; color:#94a3b8; margin-top:10px; line-height:1.3;"><strong>เหตุผลสรุป:</strong> {e_final_reasoning}</div>'
+                f'<div style="font-size:0.7rem; color:#7b8494; margin-top:4px;">💼 {e_position_sizing_note}</div>'
                 '</div>'
                 '</div>'
             )
@@ -1940,10 +2050,10 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
                 
                 st.markdown(f"""
                 <div style="font-size:0.8rem;">
-                    <p><strong style="color:var(--gemini);">Gemini Opinion:</strong> {g.get('market_sentiment', '-')}</p>
-                    <p><strong style="color:var(--claude);">Claude Challenge:</strong> {c.get('challenge_notes', '-')}</p>
+                    <p><strong style="color:var(--gemini);">Gemini Opinion:</strong> {html_lib.escape(g.get('market_sentiment', '-'))}</p>
+                    <p><strong style="color:var(--claude);">Claude Challenge:</strong> {html_lib.escape(c.get('challenge_notes', '-'))}</p>
                     <span class="pill {agree_class}">{agree_text}</span>
-                    <span class="pill">ความเสี่ยง: {c.get('risk_level', '-')}</span>
+                    <span class="pill">ความเสี่ยง: {html_lib.escape(str(c.get('risk_level', '-')))}</span>
                 </div>
                 """, unsafe_allow_html=True)
             
@@ -1953,7 +2063,10 @@ def render_portfolio_and_scanner_area(portfolio_key, scanner_market_list, defaul
             for chat in st.session_state.chat_history:
                 style_class = "chat-bubble-user" if chat["role"] == "user" else "chat-bubble-ai"
                 sender = "คุณ" if chat["role"] == "user" else "AI Copilot"
-                st.markdown(f"""<div class="{style_class}"><strong>{sender}:</strong><br>{chat['content']}</div>""", unsafe_allow_html=True)
+                # 🔒 escape ข้อความ user พิมพ์เอง + คำตอบ AI ก่อนแทรกเข้า unsafe_allow_html เสมอ
+                # (เดิมใส่ chat['content'] ดิบๆ ตรงๆ — user พิมพ์ <script>...</script> จะรันเป็น HTML/JS ทันที)
+                safe_content = html_lib.escape(chat['content']).replace("\n", "<br>")
+                st.markdown(f"""<div class="{style_class}"><strong>{sender}:</strong><br>{safe_content}</div>""", unsafe_allow_html=True)
             
             with st.form(key=f"chat_form_{portfolio_key}", clear_on_submit=True):
                 user_query = st.text_input("ปรึกษาโมเมนตัมเพิ่มเติม:", key=f"input_query_{portfolio_key}")
@@ -2064,5 +2177,5 @@ with tab_journal_class:
     render_trade_journal_tab()
 
 st.markdown("<div style='text-align:center; color:#7b8494; font-size:0.75rem; margin-top:24px;'>"
-            "ข้อมูลนี้ถูกประมวลผลด้วยโมเดลวิเคราะห์เชิงกลยุทธ์ Gemini 3.1 flash lite และ Claude 3.5 เพื่อใช้เพื่อการศึกษาเทคโนโลยีการเงินเท่านั้น"
+            "ข้อมูลนี้ถูกประมวลผลด้วยโมเดลวิเคราะห์เชิงกลยุทธ์ Gemini 3.5 flash lite และ Claude 5 เพื่อใช้เพื่อการศึกษาเทคโนโลยีการเงินเท่านั้น"
             "</div>", unsafe_allow_html=True)
