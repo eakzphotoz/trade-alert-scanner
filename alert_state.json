@@ -108,5 +108,5 @@
   "TH:SCB.BK": "BUY",
   "Crypto:BTC-USD": "SELL",
   "Crypto:ETH-USD": "SELL",
-  "Crypto:SOL-USD": "NEUTRAL"
+  "Crypto:SOL-USD": "SELL"
 }
