@@ -58,7 +58,7 @@
   "US:MCHP": "BUY",
   "US:MDLZ": "NEUTRAL",
   "US:MELI": "BUY",
-  "US:META": "NEUTRAL",
+  "US:META": "SELL",
   "US:MNST": "BUY",
   "US:MPWR": "NEUTRAL",
   "US:MRVL": "BUY",
@@ -107,6 +107,6 @@
   "TH:ADVANC.BK": "BUY",
   "TH:SCB.BK": "BUY",
   "Crypto:BTC-USD": "SELL",
-  "Crypto:ETH-USD": "NEUTRAL",
+  "Crypto:ETH-USD": "SELL",
   "Crypto:SOL-USD": "SELL"
 }
