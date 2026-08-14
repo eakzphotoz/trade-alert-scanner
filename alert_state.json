@@ -104,9 +104,9 @@
   "TH:PTT.BK": "BUY",
   "TH:CPALL.BK": "BUY",
   "TH:AOT.BK": "BUY",
-  "TH:ADVANC.BK": "BUY",
-  "TH:SCB.BK": "BUY",
+  "TH:ADVANC.BK": "NEUTRAL",
+  "TH:SCB.BK": "NEUTRAL",
   "Crypto:BTC-USD": "SELL",
-  "Crypto:ETH-USD": "NEUTRAL",
+  "Crypto:ETH-USD": "SELL",
   "Crypto:SOL-USD": "SELL"
 }
