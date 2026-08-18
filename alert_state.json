@@ -58,7 +58,7 @@
   "US:MCHP": "BUY",
   "US:MDLZ": "NEUTRAL",
   "US:MELI": "BUY",
-  "US:META": "NEUTRAL",
+  "US:META": "BUY",
   "US:MNST": "BUY",
   "US:MPWR": "NEUTRAL",
   "US:MRVL": "BUY",
@@ -70,7 +70,7 @@
   "US:NVDA": "BUY",
   "US:NXPI": "BUY",
   "US:ODFL": "BUY",
-  "US:ORCL": "BUY",
+  "US:ORCL": "NEUTRAL",
   "US:ORLY": "NEUTRAL",
   "US:PANW": "BUY",
   "US:PAYX": "BUY",
@@ -102,11 +102,11 @@
   "US:WMT": "BUY",
   "US:XEL": "NEUTRAL",
   "TH:PTT.BK": "BUY",
-  "TH:CPALL.BK": "NEUTRAL",
+  "TH:CPALL.BK": "SELL",
   "TH:AOT.BK": "BUY",
-  "TH:ADVANC.BK": "BUY",
+  "TH:ADVANC.BK": "NEUTRAL",
   "TH:SCB.BK": "BUY",
   "Crypto:BTC-USD": "SELL",
   "Crypto:ETH-USD": "NEUTRAL",
-  "Crypto:SOL-USD": "SELL"
+  "Crypto:SOL-USD": "NEUTRAL"
 }
