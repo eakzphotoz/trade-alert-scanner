@@ -42,7 +42,7 @@
   "US:GEHC": "BUY",
   "US:GILD": "NEUTRAL",
   "US:GOOG": "BUY",
-  "US:GOOGL": "NEUTRAL",
+  "US:GOOGL": "BUY",
   "US:HON": "BUY",
   "US:IDXX": "BUY",
   "US:INTC": "BUY",
@@ -106,7 +106,7 @@
   "TH:AOT.BK": "BUY",
   "TH:ADVANC.BK": "BUY",
   "TH:SCB.BK": "BUY",
-  "Crypto:BTC-USD": "NEUTRAL",
+  "Crypto:BTC-USD": "BUY",
   "Crypto:ETH-USD": "BUY",
   "Crypto:SOL-USD": "BUY"
 }
