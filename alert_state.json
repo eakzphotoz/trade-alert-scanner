@@ -11,7 +11,7 @@
   "US:AMAT": "BUY",
   "US:AMD": "BUY",
   "US:AMGN": "BUY",
-  "US:AMZN": "BUY",
+  "US:AMZN": "NEUTRAL",
   "US:APP": "BUY",
   "US:ARM": "BUY",
   "US:ASML": "BUY",
@@ -81,7 +81,7 @@
   "US:PYPL": "NEUTRAL",
   "US:QCOM": "BUY",
   "US:REGN": "NEUTRAL",
-  "US:RKLB": "NEUTRAL",
+  "US:RKLB": "SELL",
   "US:ROP": "BUY",
   "US:ROST": "BUY",
   "US:SBUX": "BUY",
@@ -107,6 +107,6 @@
   "TH:ADVANC.BK": "NEUTRAL",
   "TH:SCB.BK": "BUY",
   "Crypto:BTC-USD": "BUY",
-  "Crypto:ETH-USD": "BUY",
+  "Crypto:ETH-USD": "NEUTRAL",
   "Crypto:SOL-USD": "BUY"
 }
