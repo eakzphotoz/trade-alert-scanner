@@ -1,5 +1,5 @@
 {
-  "US:AAPL": "BUY",
+  "US:AAPL": "STRONG_BUY",
   "US:ABNB": "BUY",
   "US:ADBE": "BUY",
   "US:ADI": "BUY",
@@ -70,7 +70,7 @@
   "US:NVDA": "NEUTRAL",
   "US:NXPI": "BUY",
   "US:ODFL": "BUY",
-  "US:ORCL": "BUY",
+  "US:ORCL": "STRONG_BUY",
   "US:ORLY": "NEUTRAL",
   "US:PANW": "BUY",
   "US:PAYX": "BUY",
