@@ -1,5 +1,5 @@
 {
-  "US:AAPL": "STRONG_BUY",
+  "US:AAPL": "BUY",
   "US:ABNB": "BUY",
   "US:ADBE": "BUY",
   "US:ADI": "BUY",
@@ -81,7 +81,7 @@
   "US:PYPL": "NEUTRAL",
   "US:QCOM": "BUY",
   "US:REGN": "NEUTRAL",
-  "US:RKLB": "BUY",
+  "US:RKLB": "NEUTRAL",
   "US:ROP": "BUY",
   "US:ROST": "BUY",
   "US:SBUX": "BUY",
