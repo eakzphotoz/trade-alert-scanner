@@ -102,11 +102,11 @@
   "US:WMT": "BUY",
   "US:XEL": "NEUTRAL",
   "TH:PTT.BK": "NEUTRAL",
-  "TH:CPALL.BK": "SELL",
+  "TH:CPALL.BK": "NEUTRAL",
   "TH:AOT.BK": "SELL",
   "TH:ADVANC.BK": "NEUTRAL",
   "TH:SCB.BK": "BUY",
-  "Crypto:BTC-USD": "BUY",
-  "Crypto:ETH-USD": "BUY",
-  "Crypto:SOL-USD": "BUY"
+  "Crypto:BTC-USD": "STRONG_BUY",
+  "Crypto:ETH-USD": "STRONG_BUY",
+  "Crypto:SOL-USD": "STRONG_BUY"
 }
