@@ -9,7 +9,7 @@
   "US:ALAB": "BUY",
   "US:ALNY": "BUY",
   "US:AMAT": "BUY",
-  "US:AMD": "SELL",
+  "US:AMD": "NEUTRAL",
   "US:AMGN": "BUY",
   "US:AMZN": "BUY",
   "US:APP": "BUY",
@@ -105,8 +105,8 @@
   "TH:CPALL.BK": "NEUTRAL",
   "TH:AOT.BK": "NEUTRAL",
   "TH:ADVANC.BK": "SELL",
-  "TH:SCB.BK": "BUY",
-  "Crypto:BTC-USD": "NEUTRAL",
+  "TH:SCB.BK": "NEUTRAL",
+  "Crypto:BTC-USD": "SELL",
   "Crypto:ETH-USD": "NEUTRAL",
-  "Crypto:SOL-USD": "BUY"
+  "Crypto:SOL-USD": "NEUTRAL"
 }
