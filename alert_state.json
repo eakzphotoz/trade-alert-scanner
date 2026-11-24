@@ -62,7 +62,7 @@
   "US:MNST": "BUY",
   "US:MPWR": "NEUTRAL",
   "US:MRVL": "BUY",
-  "US:MSFT": "SELL",
+  "US:MSFT": "NEUTRAL",
   "US:MSTR": "BUY",
   "US:MU": "SELL",
   "US:NBIS": "BUY",
@@ -92,7 +92,7 @@
   "US:TER": "BUY",
   "US:TMUS": "BUY",
   "US:TRI": "NEUTRAL",
-  "US:TSLA": "SELL",
+  "US:TSLA": "NEUTRAL",
   "US:TTWO": "BUY",
   "US:TXN": "BUY",
   "US:VRTX": "BUY",
@@ -107,6 +107,6 @@
   "TH:ADVANC.BK": "SELL",
   "TH:SCB.BK": "BUY",
   "Crypto:BTC-USD": "NEUTRAL",
-  "Crypto:ETH-USD": "SELL",
+  "Crypto:ETH-USD": "NEUTRAL",
   "Crypto:SOL-USD": "SELL"
 }
